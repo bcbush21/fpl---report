@@ -446,6 +446,105 @@ def svg_line(xlabels, series, y_min, y_max, y_ticks, y_fmt, invert=False, height
     return "".join(out)
 
 
+TEAM_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+
+def league_lines(d):
+    """Every Hope Bros team's points per gameweek, one colored line each, plus a table view."""
+    hist = d.get("league_hist", {})
+    entries = [e for e in d["details"].get("league_entries", []) if e.get("entry_id") in hist]
+    if not entries:
+        return ""
+    # you are always blue; everyone else keeps a fixed color in league order
+    entries.sort(key=lambda e: e["entry_id"] != ENTRY_ID)
+    teams = [dict(k=f"t{i}", id=e["entry_id"], name=e.get("entry_name") or "?",
+                  color=TEAM_COLORS[i % len(TEAM_COLORS)], me=e["entry_id"] == ENTRY_ID)
+             for i, e in enumerate(entries)]
+    gws = sorted({g for h in hist.values() for g in h if g <= d["current"]})
+    if len(gws) < 2:
+        return ""
+    for t in teams:
+        t["pts"] = [hist[t["id"]].get(g, 0) for g in gws]
+        t["total"] = sum(t["pts"])
+
+    W, H = 1000, 380
+    L, R, T, B = 50, 190, 20, 44
+    pw, ph = W - L - R, H - T - B
+    top = max(max(t["pts"]) for t in teams)
+    y_max = 10 * (int(top // 10) + 1)
+    n = len(gws)
+    X = lambda i: L + pw * i / (n - 1)
+    Y = lambda v: T + (1 - v / y_max) * ph
+
+    out = [f'<svg viewBox="0 0 {W} {H}" class="chart big" id="lgc" role="img">']
+    for v in range(0, y_max + 1, 10):
+        out.append(f'<line x1="{L}" x2="{L + pw}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" class="grid"/>'
+                   f'<text x="{L - 10}" y="{Y(v) + 4:.1f}" class="ytick">{v}</text>')
+    every = max(1, -(-n // 12))
+    for i, g in enumerate(gws):
+        if i % every == 0 or i == n - 1:
+            out.append(f'<text x="{X(i):.1f}" y="{H - 14}" class="xtick">GW{g}</text>')
+    out.append(f'<text x="{L + pw / 2:.0f}" y="{H}" class="xtick axt">Gameweek</text>')
+
+    # draw everyone else first so your line sits on top
+    for t in sorted(teams, key=lambda t: t["me"]):
+        pts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(t["pts"]))
+        w = 4 if t["me"] else 2.25
+        out.append(f'<g data-k="{t["k"]}" class="series"><polyline points="{pts}" fill="none" stroke="{t["color"]}" '
+                   f'stroke-width="{w}" stroke-linejoin="round" stroke-linecap="round"/>')
+        for i, v in enumerate(t["pts"]):
+            out.append(f'<g class="pt"><title>{esc(t["name"])} · GW{gws[i]}: {v} pts</title>'
+                       f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="12" fill="transparent"/>'
+                       f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="{5 if t["me"] else 4}" fill="{t["color"]}" '
+                       f'stroke="#fff" stroke-width="2"/></g>')
+        out.append("</g>")
+
+    # name labels at the end of each line, nudged apart so they never overlap
+    ends = sorted(teams, key=lambda t: Y(t["pts"][-1]))
+    gap, prev = 17, -1e9
+    for t in ends:
+        y = max(Y(t["pts"][-1]), prev + gap)
+        t["ly"], prev = y, y
+    overflow = prev - (T + ph)
+    if overflow > 0:
+        for t in ends:
+            t["ly"] -= overflow
+    for t in teams:
+        name = t["name"] if len(t["name"]) <= 20 else t["name"][:19] + "…"
+        out.append(f'<g data-k="{t["k"]}" class="endlab{" me" if t["me"] else ""}">'
+                   f'<circle cx="{L + pw + 16}" cy="{t["ly"]:.1f}" r="5" fill="{t["color"]}"/>'
+                   f'<text x="{L + pw + 27}" y="{t["ly"] + 4:.1f}" fill="#0f1b2d">{esc(name)} · {t["pts"][-1]}</text></g>')
+    out.append("</svg>")
+
+    legend = "".join(f'<button class="lg-btn" data-k="{t["k"]}"><i class="sw" style="background:{t["color"]}"></i>'
+                     f'{esc(t["name"])}{" (you)" if t["me"] else ""}</button>' for t in teams)
+
+    # table view: weekly winner in bold
+    best = {i: max(t["pts"][i] for t in teams) for i in range(n)}
+    head = "".join(f"<th>GW{g}</th>" for g in gws)
+    body = ""
+    for t in sorted(teams, key=lambda t: t["total"], reverse=True):
+        cells = "".join(f'<td class="{"wk" if v == best[i] else ""}">{v}</td>' for i, v in enumerate(t["pts"]))
+        body += (f'<tr class="{"mine" if t["me"] else ""}"><td><span class="lgn"><i class="sw" '
+                 f'style="background:{t["color"]}"></i>{esc(t["name"])}</span></td>{cells}<td><b>{t["total"]}</b></td></tr>')
+
+    return f"""<div class="card"><h3>Hope Bros: points by team, every gameweek</h3>
+<p class="note">One line per team. Tap a name to spotlight that team; tap it again to show everyone. Hover or tap a point for the exact score. On a phone, swipe the chart sideways.</p>
+<div class="lg-row">{legend}</div>
+<div class="chartwrap">{"".join(out)}</div>
+<h4>Table view</h4><p class="note" style="margin-top:-4px">Bold = highest score in the league that week.</p>
+<div class="tw"><table class="lgt"><thead><tr><th>Team</th>{head}<th>Total</th></tr></thead><tbody>{body}</tbody></table></div>
+</div>
+<script>
+(function(){{var c=document.getElementById('lgc');if(!c)return;var cur='';
+document.querySelectorAll('.lg-btn').forEach(function(b){{b.addEventListener('click',function(){{
+cur=(cur===b.dataset.k)?'':b.dataset.k;
+document.querySelectorAll('.lg-btn').forEach(function(x){{x.classList.toggle('on',x.dataset.k===cur);}});
+c.querySelectorAll('[data-k]').forEach(function(el){{el.classList.toggle('dim',cur!==''&&el.dataset.k!==cur);}});
+}});}});}})();
+</script>"""
+
+
 def season_section(d):
     rows, n_teams = season_data(d)
     if len(rows) < 2:
@@ -496,7 +595,8 @@ On average you score {abs(vs_avg):.1f} pts per week {'more' if vs_avg >= 0 else 
 <div class="kpi"><b>{ordinal(last['place'])}</b><span class="{move_cls}">{arrow} {move_txt}</span></div></div>
 {place_chart}
 <div class="placestrip">{''.join(f'<div class="ps{" now" if r is last else ""}"><small>GW{r["gw"]}</small><b>{ordinal(r["place"])}</b></div>' for r in rows[-8:])}</div>
-</div></div></section>"""
+</div></div>
+{league_lines(d)}</section>"""
 
 
 # ---------------------------------------------------------------- advice
@@ -892,7 +992,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
