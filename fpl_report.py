@@ -95,6 +95,18 @@ def load_data():
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         d["history"] = dict(pool.map(hist, wanted))
+
+    # every manager's points by gameweek, for the season charts
+    def entry_hist(e):
+        try:
+            rows = get(f"{DRAFT}/entry/{e['entry_id']}/history").get("history", [])
+            return e["entry_id"], {r["event"]: r.get("points", 0) for r in rows}
+        except requests.RequestException:
+            return e["entry_id"], {}
+
+    entries = d["details"].get("league_entries", [])
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        d["league_hist"] = dict(pool.map(entry_hist, entries))
     return d
 
 # ---------------------------------------------------------------- helpers
@@ -371,6 +383,121 @@ def flags(p, teams):
     if p["pos"] in ("DEF", "MID") and p["dc_hit"] >= 0.5:
         out.append(f"DC banker ({p['dc_hit']:.0%})")
     return out
+
+# ---------------------------------------------------------------- season charts
+
+def ordinal(n):
+    return f"{n}{'th' if 11 <= n % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def season_data(d):
+    me = ENTRY_ID
+    hist = d.get("league_hist", {})
+    mine = hist.get(me, {})
+    gws = sorted(g for g in mine if g <= d["current"])
+    n_teams = len(hist) or 1
+    rows, totals = [], {e: 0 for e in hist}
+    for gw in gws:
+        for e, h in hist.items():
+            totals[e] += h.get(gw, 0)
+        place = 1 + sum(1 for e, t in totals.items() if e != me and t > totals[me])
+        week = [h.get(gw, 0) for h in hist.values()]
+        week_rank = 1 + sum(1 for e, h in hist.items() if e != me and h.get(gw, 0) > mine.get(gw, 0))
+        rows.append(dict(gw=gw, pts=mine.get(gw, 0), avg=sum(week) / len(week), place=place,
+                         total=totals[me], week_rank=week_rank))
+    return rows, n_teams
+
+
+def svg_line(xlabels, series, y_min, y_max, y_ticks, y_fmt, invert=False, height=260, tips=None):
+    """Small static line chart. series = [(name, values, color, dashed)]. Hover via native tooltips."""
+    W, H = 640, height
+    L, R, T, B = 54, 24, 18, 48
+    pw, ph = W - L - R, H - T - B
+    n = len(xlabels)
+
+    def X(i):
+        return L + (pw * (i / (n - 1)) if n > 1 else pw / 2)
+
+    def Y(v):
+        f = (v - y_min) / ((y_max - y_min) or 1)
+        return T + (f * ph if invert else (1 - f) * ph)
+
+    out = [f'<svg viewBox="0 0 {W} {H}" class="chart" role="img">']
+    for t in y_ticks:
+        y = Y(t)
+        out.append(f'<line x1="{L}" x2="{W - R}" y1="{y:.1f}" y2="{y:.1f}" class="grid"/>'
+                   f'<text x="{L - 10}" y="{y + 4:.1f}" class="ytick">{y_fmt(t)}</text>')
+    every = max(1, math.ceil(n / 10))  # keep labels readable as the season grows
+    for i, lab in enumerate(xlabels):
+        if i % every == 0 or i == n - 1:
+            out.append(f'<text x="{X(i):.1f}" y="{H - 10}" class="xtick">{lab}</text>')
+    for name, vals, color, dashed in series:
+        pts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(vals))
+        dash = ' stroke-dasharray="6 5"' if dashed else ""
+        out.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2.5" '
+                   f'stroke-linejoin="round" stroke-linecap="round"{dash}/>')
+        if not dashed:
+            for i, v in enumerate(vals):
+                tip = esc(tips[i]) if tips else f"{xlabels[i]}: {v}"
+                out.append(f'<g class="pt"><title>{tip}</title>'
+                           f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="14" fill="transparent"/>'
+                           f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="5" fill="{color}" stroke="#fff" stroke-width="2"/></g>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def season_section(d):
+    rows, n_teams = season_data(d)
+    if len(rows) < 2:
+        return ""
+    labels = [f"GW{r['gw']}" for r in rows]
+    pts = [r["pts"] for r in rows]
+    avg = [round(r["avg"], 1) for r in rows]
+    top = max(pts + avg)
+    step = 20 if top > 80 else 10
+    y_max = step * (int(top // step) + 1)
+
+    last, prev = rows[-1], rows[-2]
+    delta = last["pts"] - prev["pts"]
+    best = max(rows, key=lambda r: r["pts"])
+    vs_avg = sum(pts) / len(pts) - sum(avg) / len(avg)
+
+    pts_chart = svg_line(
+        labels, [("League average", avg, "#d97706", True), ("You", pts, "#2563eb", False)],
+        0, y_max, list(range(0, y_max + 1, step)), str,
+        tips=[f"GW{r['gw']}: {r['pts']} pts (league avg {r['avg']:.0f}, {ordinal(r['week_rank'])} of {n_teams} that week)"
+              for r in rows])
+
+    places = [r["place"] for r in rows]
+    place_chart = svg_line(
+        labels, [("Place", places, "#2563eb", False)],
+        1, n_teams, list(range(1, n_teams + 1)), ordinal, invert=True,
+        tips=[f"GW{r['gw']}: {ordinal(r['place'])} of {n_teams} ({r['total']} total pts)" for r in rows])
+
+    move = prev["place"] - last["place"]
+    move_txt = ("up " + str(move) if move > 0 else "down " + str(-move) if move < 0 else "no change") + " from last week"
+    arrow = "▲" if move > 0 else "▼" if move < 0 else "●"
+    move_cls = "pos" if move > 0 else "neg" if move < 0 else "mut"
+    d_cls = "pos" if delta > 0 else "neg" if delta < 0 else "mut"
+
+    return f"""<section id="season"><h2>Season so far</h2>
+<div class="two">
+<div class="card"><div class="ch-head"><div><h3>Points per gameweek</h3>
+<p class="note">How your weekly score moves against the Hope Bros average. Hover a point for details.</p></div>
+<div class="kpi"><b>{last['pts']}</b><span class="{d_cls}">{delta:+d} vs GW{prev['gw']}</span></div></div>
+<div class="legend"><span><i class="sw" style="background:#2563eb"></i>You</span>
+<span><i class="sw dash"></i>League average</span></div>
+{pts_chart}
+<p class="note" style="margin:12px 0 0">Best week: GW{best['gw']} with {best['pts']} pts.
+On average you score {abs(vs_avg):.1f} pts per week {'more' if vs_avg >= 0 else 'less'} than the league.</p></div>
+
+<div class="card"><div class="ch-head"><div><h3>League position</h3>
+<p class="note">Where you stood in the {n_teams}-team table after each gameweek. Higher is better.</p></div>
+<div class="kpi"><b>{ordinal(last['place'])}</b><span class="{move_cls}">{arrow} {move_txt}</span></div></div>
+{place_chart}
+<div class="placestrip">{''.join(f'<div class="ps{" now" if r is last else ""}"><small>GW{r["gw"]}</small><b>{ordinal(r["place"])}</b></div>' for r in rows[-8:])}</div>
+</div></div></section>"""
+
 
 # ---------------------------------------------------------------- advice
 
@@ -765,7 +892,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-footer{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -799,10 +926,12 @@ def render(d, players, teams):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{proj_xi:.0f}</b><span>Projected next GW (XI)</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#fixtures">Fixtures</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#fixtures">Fixtures</a>
 <a href="#finishing">xG vs actual</a><a href="#defense">Defensive contribution</a>
 <a href="#market">Free agents</a><a href="#trades">Trade targets</a></div></nav>
 <main>
+
+{season_section(d)}
 
 <section id="advice"><h2>This week's advice</h2>
 <p class="note">Lineup calls, waiver moves and keep or sell reads. Core players are never suggested as drops.</p>
