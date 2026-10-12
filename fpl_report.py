@@ -36,6 +36,20 @@ CS_PTS = {"GK": 4, "DEF": 4, "MID": 1, "FWD": 0}
 DC_THRESHOLD = {"DEF": 10, "MID": 12, "FWD": 12}  # actions needed for +2
 HOME_BOOST = 1.12  # home teams create ~12% more xG on average
 
+# ---------------------------------------------------------------- your settings
+# Players the report should never tell you to drop or trade, whatever the numbers say.
+# Use the name exactly as FPL shows it, e.g. "Palmer", "Cunha". Edit on GitHub any time.
+KEEP = []
+
+# How much of a player's over/underperformance vs xG counts as real finishing skill.
+# 0 = pure xG (ignores finishing), 1 = pure actual returns. 0.3 is a sensible middle.
+FINISHING_SKILL = 0.3
+
+# Core = top this share of players at their position by underlying output,
+# or one of your top CORE_TOP_SCORERS by total points. Core players are never drop/sell candidates.
+CORE_PERCENTILE = 0.25
+CORE_TOP_SCORERS = 4
+
 # ---------------------------------------------------------------- data
 
 SESSION = requests.Session()
@@ -226,7 +240,10 @@ def build_players(d, teams):
             avg_mins=mins / max(el.get("starts", 0), 1) if el.get("starts") else 0,
             g=g, a=a, xg=xg, xa=xa, xgi=xg + xa,
             g_diff=g - xg, a_diff=a - xa, gi_diff=(g + a) - (xg + xa),
-            xg90=per90(xg, mins), xa90=per90(xa, mins),
+            # scoring rates credit part of real finishing, so clinical players aren't underrated
+            xg90=per90(max(xg + FINISHING_SKILL * (g - xg), 0), mins),
+            xa90=per90(max(xa + FINISHING_SKILL * (a - xa), 0), mins),
+            raw_xgi90=per90(xg + xa, mins),
             dc_total=dc_total, dc90=per90(dc_total, mins),
             cs=el.get("clean_sheets", 0), bonus90=per90(el.get("bonus", 0), mins),
             saves90=per90(el.get("saves", 0), mins),
@@ -292,6 +309,29 @@ def project(p, teams, lg_xgc):
     p["cs_avg"] = sum(r[1] for r in runs) / len(runs) if runs else 0.0
 
 
+def rank_and_tag(players, squad_ids):
+    """Rank everyone within their position, then tag Core players who should be protected."""
+    for pos in POS.values():
+        group = sorted((p for p in players.values() if p["pos"] == pos and p["mins"] >= 270),
+                       key=lambda p: p["proj_run"], reverse=True)
+        n = len(group) or 1
+        for i, p in enumerate(group, 1):
+            p["pos_rank"], p["pos_pct"] = i, i / n
+    keep = {k.lower() for k in KEEP}
+    mine = [players[i] for i in squad_ids]
+    top_scorers = {p["id"] for p in sorted(mine, key=lambda p: p["total"], reverse=True)[:CORE_TOP_SCORERS]}
+    for p in players.values():
+        p.setdefault("pos_rank", None)
+        p.setdefault("pos_pct", 1.0)
+        p["elite"] = p["pos_pct"] <= CORE_PERCENTILE
+        p["core"] = p["mine"] and (p["elite"] or p["id"] in top_scorers or p["name"].lower() in keep)
+        p["kept"] = p["name"].lower() in keep
+
+
+def rank_str(p):
+    return f"{p['pos']} #{p['pos_rank']}" if p.get("pos_rank") else "-"
+
+
 def finishing_verdict(p):
     if p["xgi"] < 0.8 and abs(p["gi_diff"]) < 1:
         return "Low volume"
@@ -301,7 +341,8 @@ def finishing_verdict(p):
     if d <= -0.75:
         return "Slightly unlucky"
     if d >= 1.5:
-        return "Running hot: expect cooling"
+        # an elite player scoring above xG is still elite after regression
+        return "Elite and clinical" if p.get("elite") else "Running hot: expect cooling"
     if d >= 0.75:
         return "Slightly clinical"
     return "In line"
@@ -309,6 +350,8 @@ def finishing_verdict(p):
 
 def flags(p, teams):
     out = []
+    if p.get("core"):
+        out.append("Core: keep" if not p.get("kept") else "On your keep list")
     if p["status"] != "a" or (p["chance"] is not None and p["chance"] < 100):
         out.append(f"{STATUS.get(p['status'], p['status'])}: {p['news'] or 'no detail'}")
     if p["gp"] and p["start_rate"] < 0.6 and p["pos"] != "GK":
@@ -347,9 +390,11 @@ def advice(squad, players, teams):
                 tips.append(f"Start {b['name']} over {worst['name']}: projected "
                             f"{b['proj_next']} vs {worst['proj_next']} pts next GW.")
 
-    free = [p for p in players.values() if not p["owner"] and p["proj_run"] > 0]
+    # only free agents with a real sample of minutes, so one cameo doesn't look like a star
+    free = [p for p in players.values() if not p["owner"] and p["proj_run"] > 0
+            and p["mins"] >= 270 and p["start_rate"] >= 0.5]
     for pos in ("GK", "DEF", "MID", "FWD"):
-        mine = [p for p in squad if p["pos"] == pos]
+        mine = [p for p in squad if p["pos"] == pos and not p["core"]]
         if not mine:
             continue
         weakest = min(mine, key=lambda p: p["proj_run"])
@@ -365,12 +410,19 @@ def advice(squad, players, teams):
                         f"Next {HORIZON}: {best['proj_run']} vs {weakest['proj_run']} pts ({', '.join(why)}).")
 
     for p in squad:
-        if finishing_verdict(p).startswith("Running hot") and p["gi_diff"] >= 2:
-            tips.append(f"Sell-high: {p['name']} has {p['g'] + p['a']} G+A from {p['xgi']:.1f} xGI. "
-                        "Trade value is at its peak.")
+        ga = p["g"] + p["a"]
+        if p["gi_diff"] >= 1.5 and p["pos_rank"]:
+            if p["core"] and p["xgi"] >= 1.0:
+                tips.append(f"Keep {p['name']}: {ga} G+A from {p['xgi']:.1f} xGI, so some cooling is likely, "
+                            f"but his underlying numbers still rank {rank_str(p)}. He's a core piece.")
+            elif not p["core"] and p["pos_pct"] > 0.5:
+                # hot streak propping up below-average underlying numbers: the real sell-high case
+                tips.append(f"Sell-high candidate: {p['name']} has {ga} G+A from only {p['xgi']:.1f} xGI and "
+                            f"his underlying numbers rank {rank_str(p)}. If someone offers a better-rated "
+                            "player off his points, take it.")
         if finishing_verdict(p).startswith("Due") and p["start_rate"] >= 0.7:
-            tips.append(f"Hold: {p['name']} has {p['g'] + p['a']} G+A from {p['xgi']:.1f} xGI. "
-                        "Returns should come.")
+            tips.append(f"Hold {p['name']}: {ga} G+A from {p['xgi']:.1f} xGI ({rank_str(p)}). "
+                        "The chances are there, returns should follow.")
 
     return tips or ["No obvious moves this week."]
 
@@ -434,7 +486,7 @@ def finishing_section(players):
     cols = [("Player", who), ("Pos", lambda p: p["pos"]), ("Team", lambda p: esc(p["team"])),
             ("G", lambda p: p["g"]), ("xG", lambda p: f"{p['xg']:.2f}"), ("G−xG", lambda p: diff_cell(p["g_diff"])),
             ("A", lambda p: p["a"]), ("xA", lambda p: f"{p['xa']:.2f}"), ("A−xA", lambda p: diff_cell(p["a_diff"])),
-            ("xGI/90", lambda p: f"{p['xg90'] + p['xa90']:.2f}"),
+            ("xGI/90", lambda p: f"{p['raw_xgi90']:.2f}"), ("Rank", rank_str),
             ("Verdict", lambda p: esc(finishing_verdict(p))), ("Owner", owner_cell)]
 
     mine = sorted((p for p in outfield if p["mine"]), key=lambda p: p["gi_diff"])
@@ -447,8 +499,9 @@ def finishing_section(players):
               "<p class='note'>Getting the chances but not the returns yet. Over a season, finishing tends to drift back toward xG.</p>"
             + table(due, cols)
             + "<h3>Running hot: biggest overperformers</h3>"
-              "<p class='note'>Scoring more than their chances suggest. Some are elite finishers, most cool off. "
-              "If you own one, his trade value may be at its peak.</p>"
+              "<p class='note'>Scoring more than their chances suggest. Expect some cooling, but only toward their xG. "
+              "\"Elite and clinical\" = still a top-25% player at his position even after cooling, so keep. "
+              "\"Running hot\" = the underlying numbers are ordinary, so the points may not last.</p>"
             + table(hot, cols))
 
 
@@ -491,7 +544,7 @@ def defense_section(players, teams):
 def squad_section(squad, teams):
     cols = [("Slot", lambda p: p["slot"]), ("Player", who), ("Pos", lambda p: p["pos"]),
             ("Team", lambda p: esc(p["team"])),
-            ("Pts", lambda p: p["total"]),
+            ("Pts", lambda p: p["total"]), ("Rank", rank_str),
             ("Starts", lambda p: f"{p['starts']}/{p['gp']}"),
             ("G+A / xGI", lambda p: f"{p['g'] + p['a']} / {p['xgi']:.1f}"),
             ("DC hit", lambda p: f"{p['dc_hit']:.0%}" if p["pos"] != "GK" else "-"),
@@ -520,7 +573,8 @@ def market_section(players, teams):
 
 def trade_section(players):
     cols = [("Player", who), ("Pos", lambda p: p["pos"]), ("Team", lambda p: esc(p["team"])),
-            ("Owner", owner_cell), ("G+A / xGI", lambda p: f"{p['g'] + p['a']} / {p['xgi']:.1f}"),
+            ("Owner", owner_cell), ("Rank", rank_str),
+            ("G+A / xGI", lambda p: f"{p['g'] + p['a']} / {p['xgi']:.1f}"),
             ("Verdict", lambda p: esc(finishing_verdict(p))),
             (f"Proj next {HORIZON}", lambda p: f"<b>{p['proj_run']}</b>")]
     rows = sorted((p for p in players.values() if p["owned_by_other"] and p["proj_run"] > 0),
@@ -613,6 +667,7 @@ def main():
     players = build_players(d, teams)
     for p in players.values():
         project(p, teams, lg_xgc)
+    rank_and_tag(players, [pk["element"] for pk in d["picks"]])
     out = Path(os.environ.get("REPORT_PATH") or Path(__file__).with_name("fpl_report.html"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(d, players, teams), encoding="utf-8")
