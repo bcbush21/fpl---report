@@ -18,6 +18,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -130,15 +131,18 @@ def esc(x):
 def build_teams(d):
     teams = {t["id"]: {"id": t["id"], "name": t.get("short_name", t["name"]),
                        "full": t["name"], "code": t.get("code", t["id"]),
-                       "gp": 0, "gf": 0, "ga": 0, "xg": 0.0, "xgc90": None}
+                       "gp": 0, "gf": 0, "ga": 0, "xg": 0.0, "xgc90": None, "results": []}
              for t in d["boot"]["teams"]}
 
-    for f in d["fixtures"]:
-        if f.get("finished") and f.get("team_h_score") is not None:
-            h, a = teams[f["team_h"]], teams[f["team_a"]]
-            h["gp"] += 1; a["gp"] += 1
-            h["gf"] += f["team_h_score"]; h["ga"] += f["team_a_score"]
-            a["gf"] += f["team_a_score"]; a["ga"] += f["team_h_score"]
+    done = [f for f in d["fixtures"] if f.get("finished") and f.get("team_h_score") is not None]
+    for f in sorted(done, key=lambda f: f.get("kickoff_time") or ""):
+        h, a = teams[f["team_h"]], teams[f["team_a"]]
+        hs, as_ = f["team_h_score"], f["team_a_score"]
+        h["gp"] += 1; a["gp"] += 1
+        h["gf"] += hs; h["ga"] += as_
+        a["gf"] += as_; a["ga"] += hs
+        h["results"].append(dict(gf=hs, ga=as_, opp=f["team_a"], home=True))
+        a["results"].append(dict(gf=as_, ga=hs, opp=f["team_h"], home=False))
 
     # team xG = sum of its players' xG; team xGC/90 = its busiest keeper's xGC/90
     keeper_mins = {}
@@ -157,6 +161,22 @@ def build_teams(d):
         t["gf_pg"], t["ga_pg"] = t["gf"] / gp, t["ga"] / gp
         if not t["xgc90"]:
             t["xgc90"] = t["ga_pg"] or 1.3
+
+    # strength ratings: 60% season (goals and xG blended), 40% last 5 matches
+    for t in teams.values():
+        last = t["results"][-5:]
+        t["n5"] = len(last)
+        t["gf5"] = sum(r["gf"] for r in last)
+        t["ga5"] = sum(r["ga"] for r in last)
+        t["form"] = ["W" if r["gf"] > r["ga"] else "D" if r["gf"] == r["ga"] else "L" for r in last]
+        t["gd"] = t["gf"] - t["ga"]
+        season_att = (t["xg_pg"] + t["gf_pg"]) / 2
+        season_def = (t["xgc90"] + t["ga_pg"]) / 2
+        if t["n5"]:
+            t["att_rating"] = 0.6 * season_att + 0.4 * t["gf5"] / t["n5"]
+            t["def_rating"] = 0.6 * season_def + 0.4 * t["ga5"] / t["n5"]
+        else:
+            t["att_rating"], t["def_rating"] = season_att, season_def
 
     played = [t for t in teams.values() if t["gp"]]
     lg_xg = sum(t["xg_pg"] for t in played) / len(played) if played else 1.3
@@ -543,6 +563,147 @@ document.querySelectorAll('.lg-btn').forEach(function(x){{x.classList.toggle('on
 c.querySelectorAll('[data-k]').forEach(function(el){{el.classList.toggle('dim',cur!==''&&el.dataset.k!==cur);}});
 }});}});}})();
 </script>"""
+
+
+# ---------------------------------------------------------------- league table and matchups
+
+ATTACK_FLAG = 2.0   # projected goals at or above this = "should score"
+CS_FLAG = 0.50      # clean sheet chance at or above this = "clean sheet spot"
+
+
+def form_chips(t):
+    return "".join(f'<span class="fm {r}">{r}</span>' for r in t["form"]) or '<span class="mut">-</span>'
+
+
+def team_table_section(teams):
+    rows = [t for t in teams.values()]
+    body = []
+    for t in rows:
+        gd_cls = "pos" if t["gd"] > 0 else "neg" if t["gd"] < 0 else "mut"
+        body.append(
+            f'<tr data-gd="{t["gd"]}" data-gf="{t["gf"]}" data-ga="{t["ga"]}" data-name="{esc(t["full"])}">'
+            f'<td class="rk"></td><td>{team_cell(t)}</td><td>{t["gp"]}</td>'
+            f'<td><span class="bignum">{t["gf"]}</span><span class="sub2">xG {t["xg_pg"]:.1f}/g</span></td>'
+            f'<td><span class="bignum">{t["ga"]}</span><span class="sub2">xGA {t["xgc90"]:.1f}/g</span></td>'
+            f'<td><span class="bignum {gd_cls}">{t["gd"]:+d}</span></td>'
+            f'<td><div class="fms">{form_chips(t)}</div>'
+            f'<span class="sub2">{t["gf5"]} scored, {t["ga5"]} conceded</span></td></tr>')
+    return f"""<div class="card"><h3>Premier League: goals for and against</h3>
+<p class="note">Tap a button to re-rank. Small grey numbers are expected goals per game, which show whether
+the real totals are backed up by the chances created and allowed. Last 5 reads oldest to newest.</p>
+<div class="sortbar"><span class="note" style="margin:0">Rank by:</span>
+<button class="sb on" data-k="gd" data-dir="desc">Goal difference</button>
+<button class="sb" data-k="gf" data-dir="desc">Most goals scored</button>
+<button class="sb" data-k="ga" data-dir="asc">Fewest goals conceded</button>
+<button class="sb" data-k="ga" data-dir="desc">Most goals conceded</button></div>
+<div class="tw"><table class="tt" id="tt"><thead><tr><th>#</th><th>Team</th><th>P</th><th>Scored</th><th>Conceded</th>
+<th>GD</th><th>Last 5</th></tr></thead><tbody>{''.join(body)}</tbody></table></div></div>
+<script>
+(function(){{var tb=document.querySelector('#tt tbody');if(!tb)return;
+function sort(k,dir){{var rows=[].slice.call(tb.rows);
+rows.sort(function(a,b){{var d=(+a.dataset[k])-(+b.dataset[k]);if(dir==='desc')d=-d;
+if(d===0)d=(+b.dataset.gd)-(+a.dataset.gd);if(d===0)d=a.dataset.name.localeCompare(b.dataset.name);return d;}});
+rows.forEach(function(r,i){{r.cells[0].textContent=i+1;tb.appendChild(r);}});}}
+document.querySelectorAll('.sb').forEach(function(b){{b.addEventListener('click',function(){{
+document.querySelectorAll('.sb').forEach(function(x){{x.classList.toggle('on',x===b);}});sort(b.dataset.k,b.dataset.dir);}});}});
+sort('gd','desc');}})();
+</script>"""
+
+
+def matchups(d, teams):
+    played = [t for t in teams.values() if t["gp"]]
+    if not played:
+        return []
+    lg_att = sum(t["att_rating"] for t in played) / len(played)
+    lg_def = sum(t["def_rating"] for t in played) / len(played)
+    games = []
+    for f in sorted((f for f in d["fixtures"] if f.get("event") == d["next"] and not f.get("finished")),
+                    key=lambda f: f.get("kickoff_time") or ""):
+        h, a = teams[f["team_h"]], teams[f["team_a"]]
+        lam_h = lg_att * (h["att_rating"] / lg_att) * (a["def_rating"] / lg_def) * HOME_BOOST
+        lam_a = lg_att * (a["att_rating"] / lg_att) * (h["def_rating"] / lg_def) / HOME_BOOST
+        games.append(dict(h=h, a=a, lh=lam_h, la=lam_a, cs_h=math.exp(-lam_a), cs_a=math.exp(-lam_h),
+                          kickoff=f.get("kickoff_time")))
+
+    # flag the standouts: clear thresholds, plus the top 3 of the week if they're close
+    sides = [(g["lh"], g, "h") for g in games] + [(g["la"], g, "a") for g in games]
+    top_att = {(id(g), s) for v, g, s in sorted(sides, key=lambda x: -x[0])[:2] if v >= 1.6}
+    cs_sides = [(g["cs_h"], g, "h") for g in games] + [(g["cs_a"], g, "a") for g in games]
+    top_cs = {(id(g), s) for v, g, s in sorted(cs_sides, key=lambda x: -x[0])[:2] if v >= 0.40}
+    for g in games:
+        g["flags"] = []
+        for s, opp in (("h", "a"), ("a", "h")):
+            me, them = g[s], g[opp]
+            lam = g["l" + s]
+            cs = g["cs_" + s]
+            # a real mismatch needs both halves: a good attack AND a leaky defense (and vice versa)
+            strong_att = me["att_rating"] > lg_att and them["def_rating"] > lg_def
+            strong_def = me["def_rating"] < lg_def and them["att_rating"] < lg_att
+            if strong_att and (lam >= ATTACK_FLAG or (id(g), s) in top_att):
+                g["flags"].append(dict(kind="att", side=s, team=me, text=(
+                    f"{me['full']} should score: they average {me['gf_pg']:.1f} goals a game "
+                    f"({me['gf5']} in their last {me['n5']}), and {them['full']} concede {them['ga_pg']:.1f} "
+                    f"({them['ga5']} in their last {them['n5']}). Projected {lam:.1f} goals.")))
+            if strong_def and (cs >= CS_FLAG or (id(g), s) in top_cs):
+                g["flags"].append(dict(kind="cs", side=s, team=me, text=(
+                    f"{me['full']} clean sheet spot: they concede {me['ga_pg']:.1f} a game "
+                    f"({me['ga5']} in their last {me['n5']}), and {them['full']} score only {them['gf_pg']:.1f} "
+                    f"({them['gf5']} in their last {them['n5']}). {cs:.0%} clean sheet chance.")))
+    return games
+
+
+def matchup_section(d, teams, players):
+    games = matchups(d, teams)
+    if not games:
+        return ""
+    mine_by_team = {}
+    for p in players.values():
+        if p["mine"]:
+            mine_by_team.setdefault(p["tid"], []).append(p)
+
+    cards = []
+    for g in games:
+        h, a = g["h"], g["a"]
+        ko = ""
+        if g["kickoff"]:
+            try:
+                dt = datetime.datetime.fromisoformat(g["kickoff"].replace("Z", "+00:00"))
+                et = dt.astimezone(ZoneInfo("America/New_York"))
+                ko = et.strftime("%a %b %d, %-I:%M %p ET")
+            except ValueError:
+                pass
+        flags = "".join(
+            f'<div class="mflag {fl["kind"]}"><span class="mft">{"Goals likely" if fl["kind"] == "att" else "Clean sheet spot"}</span>'
+            f'{badge(fl["team"]["id"], 18)}<span>{esc(fl["text"])}</span></div>' for fl in g["flags"])
+        mine = mine_by_team.get(h["id"], []) + mine_by_team.get(a["id"], [])
+        mine_html = ("" if not mine else
+                     '<div class="mmine"><span class="note" style="margin:0">Your players:</span>'
+                     + "".join(f'<span class="mp">{photo(p, 30)}{esc(p["name"])}</span>' for p in mine) + "</div>")
+        hot = " hot" if g["flags"] else ""
+
+        def side(t, lam, cs, align):
+            return (f'<div class="ms {align}">{badge(t["id"], 48)}<div class="mn">{esc(t["full"])}</div>'
+                    f'<div class="fms">{form_chips(t)}</div>'
+                    f'<div class="sub2">{cs:.0%} clean sheet</div></div>')
+
+        cards.append((not g["flags"], f'''<div class="mc{hot}">
+<div class="mko">{ko}</div>
+<div class="mrow">{side(h, g["lh"], g["cs_h"], "l")}
+<div class="mscore"><span>{g["lh"]:.1f}</span><i>–</i><span>{g["la"]:.1f}</span><small>projected goals</small></div>
+{side(a, g["la"], g["cs_a"], "r")}</div>{flags}{mine_html}</div>'''))
+
+    flagged = sum(1 for g in games if g["flags"])
+    return f"""<div class="card"><h3>Gameweek {d['next']} matchups</h3>
+<p class="note">Projected goals come from each side's attack rating against the other's defense rating, adjusted
+for home advantage. Ratings blend the full season (60%) with the last 5 matches (40%), so recent form counts.
+{flagged} of {len(games)} games are flagged: <b class="g">Goals likely</b> = strong attack vs leaky defense,
+<b class="b">Clean sheet spot</b> = tight defense vs weak attack. Flagged games are listed first.</p>
+<div class="mgrid">{''.join(c for _, c in sorted(cards, key=lambda x: x[0]))}</div></div>"""
+
+
+def teams_section(d, teams, players):
+    return (f'<section id="teams"><h2>Premier League teams and this week\'s matchups</h2>'
+            f'{team_table_section(teams)}{matchup_section(d, teams, players)}</section>')
 
 
 def season_section(d):
@@ -992,7 +1153,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1026,12 +1187,14 @@ def render(d, players, teams):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{proj_xi:.0f}</b><span>Projected next GW (XI)</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#fixtures">Fixtures</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#fixtures">Fixtures</a>
 <a href="#finishing">xG vs actual</a><a href="#defense">Defensive contribution</a>
 <a href="#market">Free agents</a><a href="#trades">Trade targets</a></div></nav>
 <main>
 
 {season_section(d)}
+
+{teams_section(d, teams, players)}
 
 <section id="advice"><h2>This week's advice</h2>
 <p class="note">Lineup calls, waiver moves and keep or sell reads. Core players are never suggested as drops.</p>
