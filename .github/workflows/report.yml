@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write   # saves the predictions log back to the repo
   pages: write
   id-token: write
 
@@ -28,6 +28,16 @@ jobs:
       - run: python fpl_report.py
         env:
           REPORT_PATH: site/index.html
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      - name: Save predictions log
+        run: |
+          git config user.name "fpl-report-bot"
+          git config user.email "fpl-report-bot@users.noreply.github.com"
+          git add predictions.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update predictions log"
+            git pull --rebase origin main && git push origin HEAD:main
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

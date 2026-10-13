@@ -13,6 +13,7 @@ the fix is almost always in get() or load_data().
 """
 import datetime
 import html
+import json
 import math
 import os
 import sys
@@ -1283,12 +1284,343 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
 
-def render(d, players, teams):
+# ---------------------------------------------------------------- match predictions and tracking
+
+PRED_PATH = Path(os.environ.get("PRED_PATH") or Path(__file__).with_name("predictions.json"))
+ODDS_KEY = os.environ.get("ODDS_API_KEY", "").strip()
+ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/"
+
+# FPL short club names -> names bookmakers use (fuzzy matching covers the rest)
+ODDS_ALIASES = {
+    "man city": "manchester city", "man utd": "manchester united", "spurs": "tottenham hotspur",
+    "nott'm forest": "nottingham forest", "wolves": "wolverhampton wanderers", "brighton": "brighton and hove albion",
+    "west ham": "west ham united", "newcastle": "newcastle united", "leeds": "leeds united",
+    "bournemouth": "afc bournemouth", "coventry": "coventry city", "sheffield utd": "sheffield united",
+    "ipswich": "ipswich town", "leicester": "leicester city", "luton": "luton town", "norwich": "norwich city",
+    "west brom": "west bromwich albion", "stoke": "stoke city", "hull": "hull city", "swansea": "swansea city",
+    "cardiff": "cardiff city",
+}
+
+
+def pois(k, lam):
+    return math.exp(-lam) * lam ** k / math.factorial(k)
+
+
+def score_grid(lh, la, n=8):
+    return {(i, j): pois(i, lh) * pois(j, la) for i in range(n) for j in range(n)}
+
+
+def outcome_of(h, a):
+    return "H" if h > a else "A" if a > h else "D"
+
+
+def pick_from_lambdas(lh, la):
+    """Most likely result, then the most likely scoreline consistent with it."""
+    grid = score_grid(lh, la)
+    probs = {"H": 0.0, "D": 0.0, "A": 0.0}
+    for (i, j), v in grid.items():
+        probs[outcome_of(i, j)] += v
+    total = sum(probs.values())
+    probs = {k: v / total for k, v in probs.items()}
+    res = max(probs, key=probs.get)
+    (h, a), _ = max(((k, v) for k, v in grid.items() if outcome_of(*k) == res), key=lambda kv: kv[1])
+    return dict(h=h, a=a, res=res, pH=round(probs["H"], 3), pD=round(probs["D"], 3), pA=round(probs["A"], 3),
+                lh=round(lh, 3), la=round(la, 3), cs_h=round(math.exp(-la), 3), cs_a=round(math.exp(-lh), 3))
+
+
+def fit_lambdas(pH, pD, pA):
+    """Expected goals for each side that best reproduce the market's win/draw/win odds."""
+    best, err = (1.3, 1.1), 1e9
+    for i in range(10, 380, 5):
+        for j in range(10, 380, 5):
+            lh, la = i / 100, j / 100
+            r = pick_from_lambdas(lh, la)
+            e = (r["pH"] - pH) ** 2 + (r["pD"] - pD) ** 2 + (r["pA"] - pA) ** 2
+            if e < err:
+                best, err = (lh, la), e
+    return best
+
+
+def norm_team(name):
+    import re
+    n = name.lower().replace("&", "and").strip()
+    n = ODDS_ALIASES.get(n, n)
+    return re.sub(r"\b(fc|afc)\b", "", n).strip()
+
+
+def fetch_odds():
+    """Bookmaker win/draw/win probabilities per match, vig removed and averaged across books."""
+    if not ODDS_KEY:
+        return []
+    try:
+        r = SESSION.get(ODDS_URL, params=dict(apiKey=ODDS_KEY, regions="uk", markets="h2h", oddsFormat="decimal"),
+                        timeout=30)
+        r.raise_for_status()
+        events = r.json()
+    except (requests.RequestException, ValueError) as err:
+        print(f"Odds unavailable: {err}")
+        return []
+    out = []
+    for ev in events:
+        books = []
+        for bk in ev.get("bookmakers", []):
+            for m in bk.get("markets", []):
+                if m.get("key") != "h2h":
+                    continue
+                pr = {o["name"]: 1 / o["price"] for o in m.get("outcomes", []) if o.get("price")}
+                h, a = pr.get(ev["home_team"]), pr.get(ev["away_team"])
+                dr = pr.get("Draw")
+                if h and a and dr:
+                    s = h + a + dr
+                    books.append((h / s, dr / s, a / s))
+        if books:
+            n = len(books)
+            out.append(dict(home=norm_team(ev["home_team"]), away=norm_team(ev["away_team"]),
+                            t=ev.get("commence_time"), n=n,
+                            pH=sum(b[0] for b in books) / n, pD=sum(b[1] for b in books) / n,
+                            pA=sum(b[2] for b in books) / n))
+    return out
+
+
+def match_odds(odds, home, away, kickoff):
+    import difflib
+    names = list({o["home"] for o in odds} | {o["away"] for o in odds})
+
+    def resolve(team):
+        n = norm_team(team["full"])
+        if n in names:
+            return n
+        hit = difflib.get_close_matches(n, names, n=1, cutoff=0.6)
+        return hit[0] if hit else None
+
+    h, a = resolve(home), resolve(away)
+    k = datetime.datetime.fromisoformat(kickoff.replace("Z", "+00:00")) if kickoff else None
+    for o in odds:
+        if o["home"] == h and o["away"] == a:
+            if k and o["t"]:
+                t = datetime.datetime.fromisoformat(o["t"].replace("Z", "+00:00"))
+                if abs((t - k).total_seconds()) > 36 * 3600:
+                    continue
+            return o
+    return None
+
+
+def likely_scorers(team_id, lam, n_goals, players):
+    """Split a team's expected goals across its available players by their scoring share."""
+    pool = []
+    for p in players.values():
+        if p["tid"] != team_id or p["pos"] == "GK" or p["mins"] < 90:
+            continue
+        if p["status"] != "a" and (p["chance"] or 0) < 75:
+            continue
+        rate = (0.7 * p["xg"] + 0.3 * p["g"]) / p["mins"] * 90
+        weight = rate * min(p["avg_mins"] / 90, 1.0) * max(p["start_rate"], 0.2)
+        if weight > 0:
+            pool.append((p, weight))
+    total = sum(w for _, w in pool) or 1
+    ranked = sorted(((p, lam * w / total) for p, w in pool), key=lambda x: -x[1])
+    picks = [dict(code=p["code"], name=p["name"], xg=round(x, 3), p=round(1 - math.exp(-x), 3))
+             for p, x in ranked[:max(n_goals, 0)]]
+    top = [dict(code=p["code"], name=p["name"], p=round(1 - math.exp(-x), 3)) for p, x in ranked[:3]]
+    return picks, top
+
+
+def load_log():
+    try:
+        return json.loads(PRED_PATH.read_text())
+    except (OSError, ValueError):
+        return {"gws": {}}
+
+
+def save_log(log):
+    PRED_PATH.write_text(json.dumps(log, indent=1, sort_keys=True))
+
+
+def update_predictions(d, teams, players):
+    """Make or refresh predictions for unstarted matches, freeze them at kickoff, grade finished ones."""
+    log = load_log()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    games = matchups(d, teams)
+    odds = fetch_odds() if games else []
+    gw = str(d["next"])
+    entry = log["gws"].setdefault(gw, {"matches": {}})
+    fx_by_id = {f["id"]: f for f in d["fixtures"]}
+
+    for g in games:
+        f = next((f for f in d["fixtures"] if f.get("event") == d["next"]
+                  and f["team_h"] == g["h"]["id"] and f["team_a"] == g["a"]["id"]), None)
+        if not f:
+            continue
+        k = datetime.datetime.fromisoformat(f["kickoff_time"].replace("Z", "+00:00")) if f.get("kickoff_time") else None
+        if f.get("started") or (k and k <= now):
+            continue  # frozen at kickoff
+        model = pick_from_lambdas(g["lh"], g["la"])
+        o = match_odds(odds, g["h"], g["a"], f.get("kickoff_time"))
+        market = None
+        if o:
+            mlh, mla = fit_lambdas(o["pH"], o["pD"], o["pA"])
+            market = pick_from_lambdas(mlh, mla)
+            market.update(books=o["n"], oH=round(o["pH"], 3), oD=round(o["pD"], 3), oA=round(o["pA"], 3))
+        main = market or model
+        sh, top_h = likely_scorers(g["h"]["id"], main["lh"], main["h"], players)
+        sa, top_a = likely_scorers(g["a"]["id"], main["la"], main["a"], players)
+        entry["matches"][str(f["id"])] = dict(
+            fixture=f["id"], home=g["h"]["full"], away=g["a"]["full"], home_id=g["h"]["id"], away_id=g["a"]["id"],
+            kickoff=f.get("kickoff_time"), updated=now.isoformat(timespec="minutes"), model=model, market=market,
+            basis="market" if market else "model", scorers_h=sh, scorers_a=sa, top_h=top_h, top_a=top_a)
+
+    # grade anything that has finished
+    classic_codes = None
+    for gwk, ent in log["gws"].items():
+        for mid, m in ent["matches"].items():
+            if m.get("result", {}).get("final"):
+                continue  # graded with confirmed numbers; provisional results get refreshed
+            f = fx_by_id.get(m["fixture"])
+            if not f or not has_ended(f) or f.get("team_h_score") is None:
+                continue
+            if classic_codes is None:
+                try:
+                    classic_codes = {e["id"]: e["code"] for e in get(f"{CLASSIC}/bootstrap-static/")["elements"]}
+                except requests.RequestException:
+                    classic_codes = {}
+            scorers = {"h": [], "a": []}
+            for st in f.get("stats", []):
+                if st.get("identifier") == "goals_scored":
+                    for side in ("h", "a"):
+                        for x in st.get(side, []):
+                            scorers[side].append(dict(code=classic_codes.get(x["element"]), n=x.get("value", 1)))
+            m["result"] = dict(h=f["team_h_score"], a=f["team_a_score"], scorers=scorers,
+                               final=bool(f.get("finished")))
+    save_log(log)
+    return log
+
+
+def grade(m, which):
+    """Score one logged prediction against the real result."""
+    p, r = m.get(which), m.get("result")
+    if not p or not r:
+        return None
+    actual = outcome_of(r["h"], r["a"])
+    picked = {x["code"] for x in m["scorers_h"] + m["scorers_a"]} if which == m["basis"] else set()
+    scored = {x["code"] for x in r["scorers"]["h"] + r["scorers"]["a"] if x["code"]}
+    cs_calls = [(p["a"] == 0, r["a"] == 0), (p["h"] == 0, r["h"] == 0)]
+    return dict(result=p["res"] == actual, exact=(p["h"], p["a"]) == (r["h"], r["a"]),
+                scorer_picks=len(picked), scorer_hits=len(picked & scored),
+                cs_right=sum(1 for c, a in cs_calls if c == a), cs_total=len(cs_calls),
+                cs_called=sum(1 for c, _ in cs_calls if c), cs_called_hit=sum(1 for c, a in cs_calls if c and a))
+
+
+def predictions_section(log, players):
+    names = {p["code"]: p for p in players.values() if p.get("code")}
+    gws = sorted(log.get("gws", {}).items(), key=lambda kv: int(kv[0]))
+
+    def tally(which):
+        t = dict(n=0, result=0, exact=0, sp=0, sh=0, csr=0, cst=0)
+        for _, ent in gws:
+            for m in ent["matches"].values():
+                gr = grade(m, which)
+                if not gr:
+                    continue
+                t["n"] += 1
+                t["result"] += gr["result"]
+                t["exact"] += gr["exact"]
+                t["sp"] += gr["scorer_picks"]
+                t["sh"] += gr["scorer_hits"]
+                t["csr"] += gr["cs_right"]
+                t["cst"] += gr["cs_total"]
+        return t
+
+    def pct(a, b):
+        return f"{a / b:.0%}" if b else "-"
+
+    model_t, market_t = tally("model"), tally("market")
+    scorer_t = dict(sp=model_t["sp"] + market_t["sp"], sh=model_t["sh"] + market_t["sh"])
+
+    def card(label, t):
+        return (f'<div class="sc"><h4>{label}</h4>'
+                f'<div class="scg"><div><b>{pct(t["result"], t["n"])}</b><span>Results right</span></div>'
+                f'<div><b>{pct(t["exact"], t["n"])}</b><span>Exact scores</span></div>'
+                f'<div><b>{pct(t["csr"], t["cst"])}</b><span>Clean sheet calls</span></div>'
+                f'<div><b>{t["n"]}</b><span>Matches graded</span></div></div></div>')
+
+    scorecard = (f'<div class="scrow">{card("Stats model", model_t)}{card("Betting market", market_t)}'
+                 f'<div class="sc"><h4>Goalscorer picks</h4><div class="scg">'
+                 f'<div><b>{pct(scorer_t["sh"], scorer_t["sp"])}</b><span>Picks who scored</span></div>'
+                 f'<div><b>{scorer_t["sh"]}/{scorer_t["sp"]}</b><span>Hits / picks</span></div></div></div></div>'
+                 '<p class="note">For scale: always picking the home team gets about 45% of results right, '
+                 'and exact scores land roughly 10% of the time even for good models.</p>')
+
+    def scorer_list(xs):
+        return ", ".join(f'{esc(x["name"])}' for x in xs) or "<span class='mut'>none</span>"
+
+    def mrow(m, show_result):
+        main = m[m["basis"]]
+        res = m.get("result")
+        cs = []
+        if main["a"] == 0:
+            cs.append(f'{esc(TEAMS.get(m["home_id"], {}).get("name", m["home"]))} {main["cs_h"]:.0%}')
+        if main["h"] == 0:
+            cs.append(f'{esc(TEAMS.get(m["away_id"], {}).get("name", m["away"]))} {main["cs_a"]:.0%}')
+        alt = ""
+        if m["market"] and m["model"]:
+            mo = m["model"]
+            alt = f'<span class="sub2">Stats model: {mo["h"]}–{mo["a"]}</span>'
+        probs = (f'<div class="pbar"><span class="pb-h" style="width:{main["pH"]*100:.0f}%">{main["pH"]:.0%}</span>'
+                 f'<span class="pb-d" style="width:{main["pD"]*100:.0f}%">{main["pD"]:.0%}</span>'
+                 f'<span class="pb-a" style="width:{main["pA"]*100:.0f}%">{main["pA"]:.0%}</span></div>')
+        actual = ""
+        if show_result and res:
+            gr = grade(m, m["basis"])
+            act_names = [names.get(x["code"], {}).get("name", "?") + (f" ×{x['n']}" if x["n"] > 1 else "")
+                         for x in res["scorers"]["h"] + res["scorers"]["a"]]
+            ok = lambda b: '<span class="ok">✓</span>' if b else '<span class="no">✗</span>'
+            actual = (f'<td><b>{res["h"]}–{res["a"]}</b> {ok(gr["result"])}'
+                      f'{" <span class=ok>exact</span>" if gr["exact"] else ""}'
+                      f'<span class="sub2">{esc(", ".join(act_names)) or "no scorers"}</span>'
+                      f'<span class="sub2">Scorer picks: {gr["scorer_hits"]}/{gr["scorer_picks"]}</span></td>')
+        elif show_result:
+            actual = '<td><span class="mut">Not played yet</span></td>'
+        src = "Odds" if m["basis"] == "market" else "Stats"
+        return (f'<tr><td><div class="who">{badge(m["home_id"], 22)}<b>{esc(m["home"])}</b></div>'
+                f'<div class="who">{badge(m["away_id"], 22)}<span>{esc(m["away"])}</span></div></td>'
+                f'<td><span class="bignum">{main["h"]}–{main["a"]}</span><span class="sub2">{src}</span>{alt}</td>'
+                f'<td style="min-width:190px">{probs}</td>'
+                f'<td><span class="why">{"; ".join(cs) or "<span class=mut>none</span>"}</span></td>'
+                f'<td><span class="why">{scorer_list(m["scorers_h"])}<br>{scorer_list(m["scorers_a"])}</span></td>'
+                f'{actual}</tr>')
+
+    head = ("<tr><th>Match</th><th>Predicted</th><th>Home · Draw · Away</th><th>Clean sheet</th>"
+            "<th>Scorers (home / away)</th>{}</tr>")
+    blocks = []
+    for gwk, ent in reversed(gws):
+        ms = sorted(ent["matches"].values(), key=lambda m: m.get("kickoff") or "")
+        if not ms:
+            continue
+        done = sum(1 for m in ms if m.get("result"))
+        rows = "".join(mrow(m, True) for m in ms)
+        tbl = (f'<div class="tw"><table><thead>{head.format("<th>Actual</th>")}</thead>'
+               f'<tbody>{rows}</tbody></table></div>')
+        is_open = " open" if gwk == str(max(int(k) for k, _ in gws)) else ""
+        blocks.append(f'<details class="pgw"{is_open}><summary>Gameweek {gwk} · {done} of {len(ms)} played</summary>'
+                      f'{tbl}</details>')
+
+    odds_note = ("Predictions use betting odds where available, with the stats model logged alongside for comparison."
+                 if ODDS_KEY else
+                 "Running on the stats model only. Add an Odds API key to the repo to log betting-market predictions too.")
+    return f"""<section id="predictions"><h2>Prediction tracker</h2>
+<p class="note">A season-long experiment: a predicted result, score, clean sheets and goalscorers for every match,
+saved before kickoff and graded after full time. Predictions refresh with the latest team news until each match kicks
+off, then they're locked. {odds_note}</p>
+{scorecard}
+{''.join(blocks) or '<p class="empty">The first predictions will appear on the next run.</p>'}</section>"""
+
+
+def render(d, players, teams, log=None):
     TEAMS.clear()
     TEAMS.update(teams)
     squad = [players[pk["element"]] for pk in sorted(d["picks"], key=lambda x: x["position"])]
@@ -1310,7 +1642,7 @@ def render(d, players, teams):
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
 <nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a>
-<a href="#finishing">xG vs actual</a><a href="#market">Free agents</a></div></nav>
+<a href="#finishing">xG vs actual</a><a href="#market">Free agents</a><a href="#predictions">Predictions</a></div></nav>
 <main>
 
 {season_section(d)}
@@ -1328,6 +1660,8 @@ def render(d, players, teams):
 next {HORIZON} matchups look.</p>
 {market_section(players, teams)}</section>
 
+{predictions_section(log, players) if log is not None else ""}
+
 <footer>Matchup ratings use each team's goals scored and conceded per game, blending the full season with their last 5
 matches. Data from the FPL Draft and FPL APIs. Photos and badges from the Premier League.</footer>
 </main></body></html>"""
@@ -1341,9 +1675,12 @@ def main():
     teams, _, _ = build_teams(d)
     players = build_players(d, teams)
     rank_and_tag(players, [pk["element"] for pk in d["picks"]])
+    TEAMS.clear()
+    TEAMS.update(teams)
+    log = update_predictions(d, teams, players)
     out = Path(os.environ.get("REPORT_PATH") or Path(__file__).with_name("fpl_report.html"))
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(d, players, teams), encoding="utf-8")
+    out.write_text(render(d, players, teams, log), encoding="utf-8")
     print(f"Report written to {out}")
 
 
