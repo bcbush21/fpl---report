@@ -91,8 +91,10 @@ def load_data():
         order = kept + [e for e in owned if e not in kept]
         d["picks"] = [{"element": e, "position": i + 1} for i, e in enumerate(order)]
     mine = {p["element"] for p in d["picks"]}
+    my_slots = {(e["team"], e["element_type"]) for e in boot["elements"] if e["id"] in mine}
     wanted = [e["id"] for e in boot["elements"]
-              if e["id"] in mine or (e["element_type"] in (2, 3) and e.get("minutes", 0) >= 180)]
+              if e["id"] in mine or (e["team"], e["element_type"]) in my_slots
+              or (e["element_type"] in (2, 3) and e.get("minutes", 0) >= 180)]
 
     def hist(pid):
         try:
@@ -280,6 +282,8 @@ def build_players(d, teams):
 
         p = dict(
             id=el["id"], name=el["web_name"], pos=pos, team=t["name"], tid=el["team"],
+            draft_rank=el.get("draft_rank") or 999, news_added=el.get("news_added"),
+            news_return=el.get("news_return"),
             code=el.get("code"),
             status=el.get("status", "a"), news=el.get("news", ""),
             chance=el.get("chance_of_playing_next_round"),
@@ -729,6 +733,8 @@ def matchup_section(d, teams, players):
 for home advantage. Ratings blend the full season (60%) with the last 5 matches (40%), so recent form counts.
 {flagged} of {len(games)} games are flagged: <b class="g">Goals likely</b> = strong attack vs leaky defense,
 <b class="b">Clean sheet spot</b> = tight defense vs weak attack. Flagged games are listed first.</p>
+<p class="note" style="margin-bottom:6px">Projections can't see this week's lineup news. Check before the deadline:</p>
+{links_html()}
 <div class="mgrid">{''.join(c for _, c in sorted(cards, key=lambda x: x[0]))}</div></div>"""
 
 
@@ -789,6 +795,178 @@ On average you score {abs(vs_avg):.1f} pts per week {'more' if vs_avg >= 0 else 
 <div class="placestrip">{''.join(f'<div class="ps{" now" if r is last else ""}"><small>GW{r["gw"]}</small><b>{ordinal(r["place"])}</b></div>' for r in rows[-8:])}</div>
 </div></div>
 {league_lines(d)}</section>"""
+
+
+# ---------------------------------------------------------------- injuries, returns and position battles
+
+RADAR_TOP = 100  # watch players inside the top N of FPL's preseason draft rankings
+LINKS = [
+    ("Predicted lineups (RotoWire)", "https://www.rotowire.com/soccer/lineups.php"),
+    ("Injury table (Premier Injuries)", "https://www.premierinjuries.com/injury-table.php"),
+    ("Team news (Fantasy Football Scout)", "https://www.fantasyfootballscout.co.uk/team-news/"),
+]
+MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def now_utc():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def parse_ts(ts):
+    try:
+        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def expected_back(p):
+    """Return date from FPL news such as 'Knee injury - Expected back 7 Nov', or its news_return field."""
+    import re
+    m = re.search(r"[Ee]xpected back (\d{1,2}) ([A-Za-z]{3})", p["news"] or "")
+    today = now_utc().date()
+    if m and m.group(2).lower() in MONTHS:
+        day, mon = int(m.group(1)), MONTHS[m.group(2).lower()]
+        year = today.year + (1 if mon < today.month - 2 else 0)
+        try:
+            return datetime.date(year, mon, day)
+        except ValueError:
+            return None
+    ts = parse_ts(p.get("news_return"))
+    return ts.date() if ts else None
+
+
+def days_ago(ts):
+    t = parse_ts(ts)
+    return (now_utc() - t).days if t else None
+
+
+def links_html():
+    return '<div class="links">' + "".join(
+        f'<a href="{u}" target="_blank" rel="noopener">{esc(n)} ↗</a>' for n, u in LINKS) + "</div>"
+
+
+def position_battle(p, players):
+    """Did this player start because a teammate was out, and is that teammate now back?"""
+    if not p["log"]:
+        return None
+    mine = {g["gw"]: g["mins"] for g in p["log"]}
+    recent = p["log"][-3:]
+    best = None
+    for q in players.values():
+        if q["id"] == p["id"] or q["tid"] != p["tid"] or q["pos"] != p["pos"] or not q["log"]:
+            continue
+        if not (q["status"] == "a" or (q["chance"] or 0) >= 75):
+            continue
+        theirs = {g["gw"]: g["mins"] for g in q["log"]}
+        covered = [g["gw"] for g in recent if g["mins"] >= 60 and theirs.get(g["gw"], 0) == 0]
+        last_gw = p["log"][-1]["gw"]
+        replaced = theirs.get(last_gw, 0) >= 60 and mine.get(last_gw, 0) < 30
+        established = q["starts"] >= p["starts"] or q["draft_rank"] < p["draft_rank"]
+        if established and (covered and (replaced or theirs.get(last_gw, 0) >= 60)):
+            score = len(covered) + (2 if replaced else 0)
+            if not best or score > best["score"]:
+                best = dict(q=q, covered=covered, replaced=replaced, last_gw=last_gw, score=score)
+    return best
+
+
+def battle_note(p, b):
+    q = b["q"]
+    gws = ", ".join(f"GW{g}" for g in b["covered"])
+    txt = f"Position battle: {q['name']} is fit again. {p['name']}'s start{'s' if len(b['covered']) > 1 else ''} in {gws} came while {q['name']} was out"
+    if b["replaced"]:
+        txt += f", and {q['name']} started GW{b['last_gw']} ahead of him"
+    txt += ". Expect his minutes to drop."
+    if q["owner"] and not q["mine"]:
+        txt += f" {q['name']} is owned by {q['owner']}, so a trade is the way to get the starter."
+    elif not q["owner"]:
+        txt += f" {q['name']} is a free agent right now."
+    return txt
+
+
+def radar_rows(players):
+    rows = []
+    for p in players.values():
+        if p["draft_rank"] > RADAR_TOP:
+            continue
+        news = (p["news"] or "").lower()
+        if any(k in news for k in ("joined", "loan", "departed", "left the club", "transferred")):
+            continue
+        back = expected_back(p)
+        updated = days_ago(p["news_added"])
+        chance = p["chance"]
+        if p["status"] in ("i", "s", "u") or chance == 0:
+            cat = "out"
+        elif p["status"] == "d" or (chance is not None and chance < 100):
+            cat = "doubt"
+        elif updated is not None and updated <= 14 and p["start_rate"] < 0.7:
+            cat = "cleared"   # news recently cleared and not yet a regular
+        elif p["gp"] >= 3 and p["start_rate"] < 0.5 and p["log"] and p["log"][-1]["mins"] > 0:
+            cat = "cleared"   # back and building minutes
+        else:
+            continue
+        rows.append(dict(p=p, cat=cat, back=back, updated=updated))
+    order = {"cleared": 0, "doubt": 1, "out": 2}
+    rows.sort(key=lambda r: (order[r["cat"]], bool(r["p"]["owner"]), r["p"]["draft_rank"]))
+    return rows
+
+
+def radar_section(players):
+    rows = radar_rows(players)
+    today = now_utc().date()
+    titles = {"cleared": ("Back or just cleared", "Fit now but not yet a regular starter. The window to grab them is closing."),
+              "doubt": ("Close to returning", "Flagged doubtful or with a percentage chance. Could feature this week or next."),
+              "out": ("Out for now", "Ruled out. Worth stashing the best ones if you have a spare bench spot.")}
+    blocks = []
+    for cat in ("cleared", "doubt", "out"):
+        rs = [r for r in rows if r["cat"] == cat]
+        if not rs:
+            continue
+
+        def ret(r):
+            if r["back"]:
+                d = (r["back"] - today).days
+                when = "any day" if d <= 0 else f"in {d} day{'s' if d != 1 else ''}"
+                return f'<span class="bignum" style="font-size:16px">{r["back"]:%b %d}</span><span class="sub2">{when}</span>'
+            return '<span class="mut">No date</span>'
+
+        cols = [("Player", lambda r: who(r["p"])),
+                ("Preseason rank", lambda r: f'<span class="tag">#{r["p"]["draft_rank"]}</span>'),
+                ("Owner", lambda r: owner_cell(r["p"])),
+                ("Status", lambda r: f'<span class="why">{esc(r["p"]["news"] or "Cleared, no current news")}</span>'
+                                     + (f'<span class="sub2">{r["p"]["chance"]}% chance next round</span>'
+                                        if r["p"]["chance"] is not None else "")),
+                ("Expected back", ret),
+                ("News updated", lambda r: f'{r["updated"]} days ago' if r["updated"] is not None else "-"),
+                ("Minutes", lambda r: f'{r["p"]["mins"]}<span class="sub2">{r["p"]["starts"]} starts</span>')]
+        table_rows = [dict(r, mine=r["p"]["mine"]) for r in rs]
+        title, note = titles[cat]
+        blocks.append(f'<div class="card"><h3>{title} <span class="cnt">{len(rs)}</span></h3>'
+                      f'<p class="note">{note}</p>{table(table_rows, cols)}</div>')
+    free = sum(1 for r in rows if not r["p"]["owner"])
+    return f"""<section id="radar"><h2>Injury return radar</h2>
+<p class="note">Every top-{RADAR_TOP} player (by FPL's preseason draft rankings) who is injured, doubtful or just back,
+checked against Hope Bros ownership. {free} of {len(rows)} are free agents right now; they're listed first in each group.
+Return dates come from FPL's injury news. Before a deadline, confirm with the sites below.</p>
+{links_html()}
+{''.join(blocks) or '<p class="empty">No top players are injured or returning right now.</p>'}</section>"""
+
+
+def radar_tips(players):
+    tips = []
+    today = now_utc().date()
+    for r in radar_rows(players):
+        p = r["p"]
+        if p["owner"] or p["draft_rank"] > 60:
+            continue
+        soon = r["cat"] == "cleared" or (r["back"] and (r["back"] - today).days <= 14) or \
+            (r["cat"] == "doubt" and (p["chance"] or 0) >= 50)
+        if soon:
+            when = ("He's fit now" if r["cat"] == "cleared" else
+                    f"Expected back {r['back']:%b %d}" if r["back"] else f"{p['chance']}% chance next round")
+            tips.append(tip("waiver", f"Grab {p['name']} before he's back",
+                            f"Preseason #{p['draft_rank']} and nobody in Hope Bros owns him. {when}. "
+                            "Stash him now; once he's starting, someone else will claim him.", p))
+    return tips[:3]
 
 
 # ---------------------------------------------------------------- squad review
@@ -910,6 +1088,10 @@ def review(p, teams, players, ranks):
                 qual = f", whose {side} ranks #{orank} of 20, a tough one"
         notes.append(f"Next: {opp['full']} ({'home' if nx['home'] else 'away'}){qual}. Next {HORIZON} overall: {lab.lower()}.")
 
+    battle = position_battle(p, players)
+    if battle:
+        notes.insert(0, battle_note(p, battle))
+
     # ---- verdict
     alt = None
     free = [q for q in players.values() if q["pos"] == p["pos"] and not q["owner"] and q["mins"] >= 270
@@ -926,6 +1108,13 @@ def review(p, teams, players, ranks):
             v, why = "hold", "Injured, but he's one of your best players. Bench him and wait."
         else:
             v, why = "bench", "Not fit to play this week. Keep him if the injury is short, otherwise look at a replacement."
+    elif battle and battle["replaced"]:
+        q = battle["q"]
+        if p["core"]:
+            v, why = "monitor", f"{q['name']} is back and took his place last week. Keep him, but don't count on starts."
+        else:
+            v, why = "replace", (f"He was keeping the seat warm for {q['name']}, who's fit and started last week. "
+                                 "A player without guaranteed minutes is a roster spot you can use better.")
     elif hot_return:
         v, why = "start", (f"Back from his absence and producing straight away ({recent_ppa:.0f} pts a game since returning). "
                            "Low season minutes are misleading here.")
@@ -955,7 +1144,8 @@ def review(p, teams, players, ranks):
                           "Doing his job, no reason to change.")
 
     return dict(v=v, why=why, notes=notes, total=total_pts, ppa=ppa, p90=p90, total_mins=total_mins,
-                n=n, full=full, apps=len(played), mins_share=mins_share, alt=alt if v == "replace" else None)
+                n=n, full=full, apps=len(played), mins_share=mins_share,
+                alt=alt if v == "replace" and not battle else None, battle=battle)
 
 
 def gw_bars(p, teams):
@@ -1002,6 +1192,12 @@ def squad_review_section(squad, players, teams):
             alt = (f'<div class="alt">{photo(a, 36)}<div><b>Option: {esc(a["name"])}</b>'
                    f'<div class="tm">{badge(a["tid"], 14)}{esc(a["team"])} · free agent · projects {a["proj_run"]} '
                    f'over next {HORIZON}</div></div></div>')
+        if r["battle"] and not r["battle"]["q"]["mine"]:
+            q = r["battle"]["q"]
+            how = (f"owned by {esc(q['owner'])}, trade target" if q["owner"] else "free agent, pick him up")
+            alt = (f'<div class="alt">{photo(q, 36)}<div><b>The starter: {esc(q["name"])}</b>'
+                   f'<div class="tm">{badge(q["tid"], 14)}{esc(q["team"])} · {how} · '
+                   f'{q["starts"]} starts this season</div></div></div>')
         p90 = f'{r["p90"]:.1f}' if r["p90"] is not None else "-"
         notes = "".join(f"<li>{esc(x)}</li>" for x in r["notes"])
         cards.append(f'''<div class="rv">
@@ -1053,8 +1249,11 @@ def advice(squad, players, teams):
     # only free agents with a real sample of minutes, so one cameo doesn't look like a star
     free = [p for p in players.values() if not p["owner"] and p["proj_run"] > 0
             and p["mins"] >= 270 and p["start_rate"] >= 0.5]
+    # the squad review has the context (returning from injury, form, core); never offer a drop it disagrees with
+    ranks = team_ranks(teams)
+    protected = {p["id"] for p in squad if review(p, teams, players, ranks)["v"] in ("start", "form", "core", "hold")}
     for pos in ("GK", "DEF", "MID", "FWD"):
-        mine = [p for p in squad if p["pos"] == pos and not p["core"]]
+        mine = [p for p in squad if p["pos"] == pos and not p["core"] and p["id"] not in protected]
         if not mine:
             continue
         weakest = min(mine, key=lambda p: p["proj_run"])
@@ -1087,6 +1286,16 @@ def advice(squad, players, teams):
                             f"{ga} G+A from {p['xgi']:.1f} xGI ({rank_str(p)}). The chances are there, "
                             "returns should follow.", p))
 
+    for p in squad:
+        b = position_battle(p, players)
+        if b and b["replaced"]:
+            q = b["q"]
+            target = (f"{q['name']} is owned by {q['owner']}; offer a trade." if q["owner"] and not q["mine"] else
+                      f"{q['name']} is a free agent; pick him up." if not q["owner"] else "")
+            tips.insert(0, tip("bench", f"Rotation risk: {p['name']}",
+                               f"He started while {q['name']} was out, and {q['name']} started GW{b['last_gw']} ahead of him. "
+                               + target, p, q))
+    tips.extend(radar_tips(players))
     return tips
 
 # ---------------------------------------------------------------- rendering
@@ -1418,7 +1627,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1452,7 +1661,7 @@ def render(d, players, teams):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{proj_xi:.0f}</b><span>Projected next GW (XI)</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#review">Squad review</a><a href="#fixtures">Fixtures</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#review">Squad review</a><a href="#radar">Injury radar</a><a href="#fixtures">Fixtures</a>
 <a href="#finishing">xG vs actual</a><a href="#defense">Defensive contribution</a>
 <a href="#market">Free agents</a><a href="#trades">Trade targets</a></div></nav>
 <main>
@@ -1472,6 +1681,8 @@ opponent, clean sheet odds, defensive contribution, saves and bonus.</p>
 {squad_cards(squad, teams)}</section>
 
 {squad_review_section(squad, players, teams)}
+
+{radar_section(players)}
 
 <section id="fixtures"><h2>Fixture outlook, {gw_range}</h2>
 <p class="note">Who has the easy and hard runs coming up, and why, adjusted for home and away.</p>
