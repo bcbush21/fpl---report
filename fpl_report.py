@@ -170,6 +170,8 @@ def build_teams(d):
         t["ga5"] = sum(r["ga"] for r in last)
         t["form"] = ["W" if r["gf"] > r["ga"] else "D" if r["gf"] == r["ga"] else "L" for r in last]
         t["gd"] = t["gf"] - t["ga"]
+        t["cs"] = sum(1 for r in t["results"] if r["ga"] == 0)
+        t["cs5"] = sum(1 for r in last if r["ga"] == 0)
         season_att = (t["xg_pg"] + t["gf_pg"]) / 2
         season_def = (t["xgc90"] + t["ga_pg"]) / 2
         if t["n5"]:
@@ -581,11 +583,13 @@ def team_table_section(teams):
     for t in rows:
         gd_cls = "pos" if t["gd"] > 0 else "neg" if t["gd"] < 0 else "mut"
         body.append(
-            f'<tr data-gd="{t["gd"]}" data-gf="{t["gf"]}" data-ga="{t["ga"]}" data-name="{esc(t["full"])}">'
+            f'<tr data-gd="{t["gd"]}" data-gf="{t["gf"]}" data-ga="{t["ga"]}" data-cs="{t["cs"]}" data-name="{esc(t["full"])}">'
             f'<td class="rk"></td><td>{team_cell(t)}</td><td>{t["gp"]}</td>'
             f'<td><span class="bignum">{t["gf"]}</span><span class="sub2">xG {t["xg_pg"]:.1f}/g</span></td>'
             f'<td><span class="bignum">{t["ga"]}</span><span class="sub2">xGA {t["xgc90"]:.1f}/g</span></td>'
             f'<td><span class="bignum {gd_cls}">{t["gd"]:+d}</span></td>'
+            f'<td><span class="bignum">{t["cs"]}</span><span class="sub2">{t["cs"] / max(t["gp"], 1):.0%} of games · '
+            f'{t["cs5"]} in last {t["n5"]}</span></td>'
             f'<td><div class="fms">{form_chips(t)}</div>'
             f'<span class="sub2">{t["gf5"]} scored, {t["ga5"]} conceded</span></td></tr>')
     return f"""<div class="card"><h3>Premier League: goals for and against</h3>
@@ -595,9 +599,10 @@ the real totals are backed up by the chances created and allowed. Last 5 reads o
 <button class="sb on" data-k="gd" data-dir="desc">Goal difference</button>
 <button class="sb" data-k="gf" data-dir="desc">Most goals scored</button>
 <button class="sb" data-k="ga" data-dir="asc">Fewest goals conceded</button>
-<button class="sb" data-k="ga" data-dir="desc">Most goals conceded</button></div>
+<button class="sb" data-k="ga" data-dir="desc">Most goals conceded</button>
+<button class="sb" data-k="cs" data-dir="desc">Most clean sheets</button></div>
 <div class="tw"><table class="tt" id="tt"><thead><tr><th>#</th><th>Team</th><th>P</th><th>Scored</th><th>Conceded</th>
-<th>GD</th><th>Last 5</th></tr></thead><tbody>{''.join(body)}</tbody></table></div></div>
+<th>GD</th><th>Clean sheets</th><th>Last 5</th></tr></thead><tbody>{''.join(body)}</tbody></table></div></div>
 <script>
 (function(){{var tb=document.querySelector('#tt tbody');if(!tb)return;
 function sort(k,dir){{var rows=[].slice.call(tb.rows);
