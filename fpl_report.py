@@ -2245,6 +2245,7 @@ function chips(p){
 }
 // [label, display, value used to pick the best, difference vs your player: (p, base) => [number, decimals, unit]]
 const ROWS = [
+  ['Next 5 fixtures', p => `<span class="pill ${({'Easy':'e1','Good':'e2','Average':'e3','Tough':'e4','Very tough':'e5','Blank':'e5'})[p.n5] || 'e3'}">${p.n5}</span><div class="ccs">${chips(p)}</div>`, p => FIX[p.n5] || 1, null],
   ['Status', p => p.st === 'a' && (p.ch == null || p.ch >= 100) ? '<span class="pos">Available</span>' : `<span class="neg">${esc(p.news || 'Flagged')}</span>`, p => avail(p), null],
   ['Owner', p => p.mine ? '<span class="tag you">You</span>' : p.fa ? '<span class="tag fa">Free agent</span>' : `<span class="tag">${esc(p.own)}</span>`, null, null],
   ['Total points', p => p.tot, p => p.tot, (p, b) => [p.tot - b.tot, 0, 'pts']],
@@ -2257,7 +2258,6 @@ const ROWS = [
   ['Goals + assists', p => `${p.g + p.a}<small>${p.g}G ${p.a}A · xGI ${(p.xg + p.xa).toFixed(1)}</small>`, p => p.g + p.a, (p, b) => [(p.g + p.a) - (b.g + b.a), 0, '']],
   ['Match rating', p => p.r5 == null ? '<span class="mut">-</span>' : (p.r5 >= 0.5 ? 'Top ' + Math.max(1, Math.round((1 - p.r5) * 100)) + '%' : 'Bottom ' + Math.max(1, Math.round(p.r5 * 100)) + '%') + `<small>last ${p.r5n}, vs ${p.pos}</small>`, p => p.r5 == null ? -1 : p.r5, null],
   ['Defensive contribution', p => p.dc == null ? '<span class="mut">-</span>' : Math.round(p.dc * 100) + '%<small>of games hit bonus</small>', p => p.dc == null ? -1 : p.dc, (p, b) => p.dc == null || b.dc == null ? null : [Math.round((p.dc - b.dc) * 100), 0, '%']],
-  ['Next 5 fixtures', p => `<span class="pill ${({'Easy':'e1','Good':'e2','Average':'e3','Tough':'e4','Very tough':'e5','Blank':'e5'})[p.n5] || 'e3'}">${p.n5}</span><div class="ccs">${chips(p)}</div>`, p => FIX[p.n5] || 1, null],
 ];
 function vsMine(p, base, dfn){
   if (!base || !dfn || p.id === base.id) return '';
