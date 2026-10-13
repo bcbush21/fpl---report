@@ -117,6 +117,37 @@ def load_data():
     entries = d["details"].get("league_entries", [])
     with ThreadPoolExecutor(max_workers=8) as pool:
         d["league_hist"] = dict(pool.map(entry_hist, entries))
+
+    # every manager's counted lineup and every player's points, for each gameweek played so far
+    gws = list(range(1, current + 1))
+
+    def lineup(job):
+        eid, gw = job
+        try:
+            r = get(f"{DRAFT}/entry/{eid}/event/{gw}")
+        except requests.RequestException:
+            return job, None
+        xi = {p["element"] for p in r.get("picks", []) if p.get("position", 99) <= 11}
+        for sub in r.get("subs", []) or []:  # automatic subs: make sure only counted players remain
+            xi.discard(sub.get("element_out"))
+            if sub.get("element_in"):
+                xi.add(sub["element_in"])
+        return job, xi
+
+    def live(gw):
+        try:
+            els = get(f"{DRAFT}/event/{gw}/live").get("elements", {})
+            return gw, {int(k): (v.get("stats", {}).get("total_points", 0), v.get("stats", {}).get("minutes", 0))
+                        for k, v in els.items()}
+        except requests.RequestException:
+            return gw, {}
+
+    jobs = [(e["entry_id"], gw) for e in entries if e.get("entry_id") for gw in gws]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        d["lineups"] = {k: v for k, v in pool.map(lineup, jobs) if v is not None}
+        raw = dict(pool.map(live, gws))
+    d["live"] = {gw: {k: v[0] for k, v in m.items()} for gw, m in raw.items()}
+    d["live_min"] = {gw: {k: v[1] for k, v in m.items()} for gw, m in raw.items()}
     return d
 
 # ---------------------------------------------------------------- helpers
@@ -1284,7 +1315,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\n.dchips{display:flex;gap:5px}.dcol{display:flex;flex-direction:column;align-items:center;gap:2px}\n.dcol small{font-size:10px;color:var(--muted)}\n.dchip{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;border-radius:7px;font-weight:800;font-size:13px;background:#eef1f6;color:var(--ink);cursor:default}\n.dchip.up{background:var(--green-soft);color:var(--green)}.dchip.down{background:var(--red-soft);color:var(--red)}\n.dchip.dnp{color:var(--muted);background:#f5f6f8}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1641,6 +1672,163 @@ off, then they're locked. {odds_note}</p>
 {''.join(blocks) or '<p class="empty">The first predictions will appear on the next run.</p>'}</section>"""
 
 
+# ---------------------------------------------------------------- me vs the league
+
+def league_benchmark(d, players):
+    """Average points per counted player, by position and gameweek, across opponents' lineups."""
+    pos_of = {p["id"]: p["pos"] for p in players.values()}
+    gws = sorted(d.get("live", {}))
+    bench, mine = {}, {}
+    for gw in gws:
+        pts = d["live"].get(gw, {})
+        opp = {k: [] for k in ("GK", "DEF", "MID", "FWD")}
+        me = {k: [] for k in ("GK", "DEF", "MID", "FWD")}
+        for (eid, g), xi in d.get("lineups", {}).items():
+            if g != gw:
+                continue
+            target = me if eid == ENTRY_ID else opp
+            for el in xi:
+                pos = pos_of.get(el)
+                if pos:
+                    target[pos].append((el, pts.get(el, 0)))
+        bench[gw] = {k: (sum(x for _, x in v) / len(v) if v else None, len(v)) for k, v in opp.items()}
+        mine[gw] = me
+    pooled = {}
+    for pos in ("GK", "DEF", "MID", "FWD"):
+        allv = []
+        for (eid, g), xi in d.get("lineups", {}).items():
+            if eid == ENTRY_ID:
+                continue
+            for el in xi:
+                if pos_of.get(el) == pos:
+                    allv.append(d["live"].get(g, {}).get(el, 0))
+        pooled[pos] = sum(allv) / len(allv) if allv else 0.0
+    return gws, bench, mine, pooled
+
+
+def diff_chip(v, avg, label=None):
+    if v is None:
+        return '<span class="dchip dnp">–</span>'
+    if avg is None:
+        return f'<span class="dchip">{v}</span>'
+    cls = "up" if v > avg else "down" if v < avg else ""
+    title = f"{label + ': ' if label else ''}{v} pts vs league average {avg:.1f}"
+    return f'<span class="dchip {cls}" title="{esc(title)}">{v}</span>'
+
+
+def benchmark_section(d, players, squad):
+    gws, bench, mine, pooled = league_benchmark(d, players)
+    if not gws or not d.get("lineups"):
+        return ""
+    positions = ("GK", "DEF", "MID", "FWD")
+
+    # 1) position averages each week: league (opponents) vs me
+    head = "".join(f"<th>{p}</th>" for p in positions)
+    body = ""
+    for gw in gws:
+        cells = ""
+        for pos in positions:
+            avg, n = bench[gw][pos]
+            mv = [x for _, x in mine[gw][pos]]
+            my_avg = sum(mv) / len(mv) if mv else None
+            if avg is None:
+                cells += "<td>-</td>"
+                continue
+            if my_avg is None:
+                cells += f'<td><span class="bignum" style="font-size:15px">{avg:.1f}</span><span class="sub2">you: none</span></td>'
+                continue
+            dlt = round(my_avg - avg, 1) + 0.0  # avoid showing -0.0
+            cls = "pos" if dlt > 0 else "neg" if dlt < 0 else "mut"
+            cells += (f'<td><span class="bignum" style="font-size:15px">{avg:.1f}</span>'
+                      f'<span class="sub2">you {my_avg:.1f} <b class="{cls}">{dlt:+.1f}</b></span></td>')
+        body += f"<tr><td><b>GW{gw}</b></td>{cells}</tr>"
+    season_cells = "".join(f'<td><b>{pooled[p]:.1f}</b></td>' for p in positions)
+    table1 = (f'<div class="tw"><table class="lgt"><thead><tr><th>Gameweek</th>{head}</tr></thead>'
+              f'<tbody>{body}<tr class="mine"><td><b>Season</b></td>{season_cells}</tr></tbody></table></div>')
+
+    # 2) my current players, week by week against the average at their position
+    def per_week(p):
+        out = []
+        for gw in gws:
+            avg = bench[gw][p["pos"]][0]
+            v = d["live"].get(gw, {}).get(p["id"], 0)
+            played = d.get("live_min", {}).get(gw, {}).get(p["id"], 0) > 0
+            out.append((gw, v, avg, played))
+        return out
+
+    rows = []
+    for p in squad:
+        wk = per_week(p)
+        total = sum(v for _, v, _, _ in wk)
+        avg_pp = total / len(wk) if wk else 0
+        bm = pooled[p["pos"]]
+        above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
+        pl = [v for _, v, _, played in wk if played]
+        avg_pl = sum(pl) / len(pl) if pl else None
+        rows.append(dict(p=p, wk=wk, avg=avg_pp, bm=bm, gap=round(avg_pp - bm, 1) + 0.0, above=above, mine=True,
+                         avg_pl=avg_pl, n_pl=len(pl),
+                         gap_pl=(round(avg_pl - bm, 1) + 0.0) if avg_pl is not None else None))
+    rows.sort(key=lambda r: -r["gap"])
+    cols = [("Player", lambda r: who(r["p"])),
+            ("Each gameweek", lambda r: '<div class="dchips">' + "".join(
+                f'<div class="dcol"><small>GW{gw}</small>{diff_chip(v if pl else None, a, f"GW{gw}")}</div>' for gw, v, a, pl in r["wk"]) + "</div>"),
+            ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
+            ("League avg", lambda r: f'<span class="mut">{r["bm"]:.1f}</span><span class="sub2">{r["p"]["pos"]}</span>'),
+            ("Gap", lambda r: f'<span class="bignum {"pos" if r["gap"] > 0 else "neg" if r["gap"] < 0 else "mut"}">{r["gap"]:+.1f}</span>'),
+            ("When he played", lambda r: "-" if r["avg_pl"] is None else
+                f'{r["avg_pl"]:.1f} <b class="{"pos" if r["gap_pl"] > 0 else "neg" if r["gap_pl"] < 0 else "mut"}">'
+                f'{r["gap_pl"]:+.1f}</b><span class="sub2">in {r["n_pl"]} of {len(r["wk"])} games</span>'),
+            ("Weeks above", lambda r: f'{r["above"]}/{len(r["wk"])}')]
+    table2 = table(rows, cols, False)
+
+    # 3) free agents who beat the benchmark for their position
+    fa_rows = []
+    for p in players.values():
+        if p["owner"] or p["status"] not in ("a", "d") or p["mins"] < 180:
+            continue
+        wk = per_week(p)
+        if not wk:
+            continue
+        avg_pp = sum(v for _, v, _, _ in wk) / len(wk)
+        last3 = [v for _, v, _, _ in wk[-3:]]
+        l3 = sum(last3) / len(last3) if last3 else 0
+        bm = pooled[p["pos"]]
+        if avg_pp > bm:
+            above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
+            fa_rows.append(dict(p=p, wk=wk, avg=avg_pp, l3=l3, bm=bm, gap=avg_pp - bm, above=above))
+    fa_rows.sort(key=lambda r: -r["gap"])
+    fa_html = ""
+    for pos, label in (("GK", "Goalkeepers"), ("DEF", "Defenders"), ("MID", "Midfielders"), ("FWD", "Forwards")):
+        rs = [r for r in fa_rows if r["p"]["pos"] == pos][:6]
+        if not rs:
+            continue
+        fcols = [("Player", lambda r: who(r["p"])),
+                 ("Each gameweek", cols[1][1]),
+                 ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
+                 ("Last 3 GWs", lambda r: f'{r["l3"]:.1f}<span class="sub2">{"rising" if r["l3"] > r["avg"] + 1 else "falling" if r["l3"] < r["avg"] - 1 else "steady"}</span>'),
+                 ("Gap", lambda r: f'<span class="bignum pos">{r["gap"]:+.1f}</span>'),
+                 ("Weeks above", lambda r: f'{r["above"]}/{len(r["wk"])}'),
+                 (f"Next {HORIZON}", lambda r: pill(next5(r["p"], TEAMS)[0]))]
+        fa_html += f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>{table(rs, fcols, False)}'
+
+    return f"""<section id="vsleague"><h2>Me vs the league</h2>
+<p class="note">The benchmark is the average points scored by players who actually counted for your opponents each
+gameweek (their starting XI after automatic subs), split by position. Beating it means your player is out-earning
+what the other Hope Bros managers are getting from that slot. Green = above the average, red = below.</p>
+<div class="card"><h3>League average by position, each gameweek</h3>
+<p class="note">Big number = your opponents' average per counted player. Underneath: your own counted players' average and the gap.</p>
+{table1}</div>
+<div class="card"><h3>Your players vs the average at their position</h3>
+<p class="note">Every gameweek this season, including weeks before you owned him or when he was on your bench, so you're
+judging the player, not your lineup choices. A dash means he didn't feature. "When he played" only counts games
+he was on the pitch, which is the fairer read for anyone who's been injured. Sorted best to worst.</p>
+{table2}</div>
+<div class="card"><h3>Free agents beating the average</h3>
+<p class="note">Unowned players whose average per gameweek is higher than what your opponents' players at that position average.</p>
+{fa_html or '<p class="empty">No free agents are beating the league average right now.</p>'}</div>
+</section>"""
+
+
 def render(d, players, teams, log=None):
     TEAMS.clear()
     TEAMS.update(teams)
@@ -1662,7 +1850,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a><a href="#vsleague">Me vs the league</a>
 <a href="#finishing">xG vs actual</a><a href="#market">Free agents</a><a href="#predictions">Predictions</a></div></nav>
 <main>
 
@@ -1671,6 +1859,8 @@ def render(d, players, teams, log=None):
 {teams_section(d, teams, players)}
 
 {squad_review_section(squad, players, teams)}
+
+{benchmark_section(d, players, squad)}
 
 <section id="finishing"><h2>xG and xA vs actual returns</h2>
 <p class="note">+/- is actual minus expected. Positive = finishing above their chances, negative = due for more.</p>
