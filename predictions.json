@@ -1,0 +1,744 @@
+{
+ "gws": {
+  "7": {
+   "matches": {
+    "61": {
+     "away": "Sunderland",
+     "away_id": 20,
+     "basis": "model",
+     "fixture": 61,
+     "home": "Bournemouth",
+     "home_id": 3,
+     "kickoff": "2026-10-18T13:00:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.168,
+      "cs_h": 0.239,
+      "h": 2,
+      "la": 1.432,
+      "lh": 1.785,
+      "pA": 0.31,
+      "pD": 0.23,
+      "pH": 0.46,
+      "res": "H"
+     },
+     "scorers_a": [
+      {
+       "code": 484420,
+       "name": "E.Le F\u00e9e",
+       "p": 0.404,
+       "xg": 0.518
+      }
+     ],
+     "scorers_h": [
+      {
+       "code": 201658,
+       "name": "Tavernier",
+       "p": 0.486,
+       "xg": 0.665
+      },
+      {
+       "code": 444102,
+       "name": "Evanilson",
+       "p": 0.346,
+       "xg": 0.425
+      }
+     ],
+     "top_a": [
+      {
+       "code": 484420,
+       "name": "E.Le F\u00e9e",
+       "p": 0.404
+      },
+      {
+       "code": 437505,
+       "name": "Isidor",
+       "p": 0.202
+      },
+      {
+       "code": 536661,
+       "name": "N.Angulo",
+       "p": 0.191
+      }
+     ],
+     "top_h": [
+      {
+       "code": 201658,
+       "name": "Tavernier",
+       "p": 0.486
+      },
+      {
+       "code": 444102,
+       "name": "Evanilson",
+       "p": 0.346
+      },
+      {
+       "code": 483067,
+       "name": "Silva",
+       "p": 0.251
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "62": {
+     "away": "Liverpool",
+     "away_id": 14,
+     "basis": "model",
+     "fixture": 62,
+     "home": "Brentford",
+     "home_id": 4,
+     "kickoff": "2026-10-17T14:00:00Z",
+     "market": null,
+     "model": {
+      "a": 0,
+      "cs_a": 0.202,
+      "cs_h": 0.411,
+      "h": 1,
+      "la": 0.888,
+      "lh": 1.598,
+      "pA": 0.209,
+      "pD": 0.251,
+      "pH": 0.54,
+      "res": "H"
+     },
+     "scorers_a": [],
+     "scorers_h": [
+      {
+       "code": 502500,
+       "name": "Thiago",
+       "p": 0.324,
+       "xg": 0.391
+      }
+     ],
+     "top_a": [
+      {
+       "code": 424876,
+       "name": "Szoboszlai",
+       "p": 0.247
+      },
+      {
+       "code": 494595,
+       "name": "Wirtz",
+       "p": 0.162
+      },
+      {
+       "code": 551499,
+       "name": "Munoz",
+       "p": 0.142
+      }
+     ],
+     "top_h": [
+      {
+       "code": 502500,
+       "name": "Thiago",
+       "p": 0.324
+      },
+      {
+       "code": 513418,
+       "name": "Schade",
+       "p": 0.293
+      },
+      {
+       "code": 249231,
+       "name": "Lewis-Potter",
+       "p": 0.166
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "63": {
+     "away": "Crystal Palace",
+     "away_id": 8,
+     "basis": "model",
+     "fixture": 63,
+     "home": "Brighton",
+     "home_id": 5,
+     "kickoff": "2026-10-18T13:00:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.016,
+      "cs_h": 0.338,
+      "h": 4,
+      "la": 1.084,
+      "lh": 4.137,
+      "pA": 0.052,
+      "pD": 0.08,
+      "pH": 0.868,
+      "res": "H"
+     },
+     "scorers_a": [
+      {
+       "code": 247412,
+       "name": "Strand Larsen",
+       "p": 0.167,
+       "xg": 0.183
+      }
+     ],
+     "scorers_h": [
+      {
+       "code": 60307,
+       "name": "Gro\u00df",
+       "p": 0.585,
+       "xg": 0.878
+      },
+      {
+       "code": 465730,
+       "name": "De Cuyper",
+       "p": 0.506,
+       "xg": 0.706
+      },
+      {
+       "code": 611695,
+       "name": "Yalcouy\u00e9",
+       "p": 0.46,
+       "xg": 0.616
+      },
+      {
+       "code": 647850,
+       "name": "Kostoulas",
+       "p": 0.445,
+       "xg": 0.589
+      }
+     ],
+     "top_a": [
+      {
+       "code": 247412,
+       "name": "Strand Larsen",
+       "p": 0.167
+      },
+      {
+       "code": 244723,
+       "name": "Mitchell",
+       "p": 0.158
+      },
+      {
+       "code": 570794,
+       "name": "Khalaili",
+       "p": 0.148
+      }
+     ],
+     "top_h": [
+      {
+       "code": 60307,
+       "name": "Gro\u00df",
+       "p": 0.585
+      },
+      {
+       "code": 465730,
+       "name": "De Cuyper",
+       "p": 0.506
+      },
+      {
+       "code": 611695,
+       "name": "Yalcouy\u00e9",
+       "p": 0.46
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "64": {
+     "away": "Chelsea",
+     "away_id": 6,
+     "basis": "model",
+     "fixture": 64,
+     "home": "Everton",
+     "home_id": 9,
+     "kickoff": "2026-10-17T11:30:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.127,
+      "cs_h": 0.254,
+      "h": 2,
+      "la": 1.371,
+      "lh": 2.063,
+      "pA": 0.253,
+      "pD": 0.213,
+      "pH": 0.534,
+      "res": "H"
+     },
+     "scorers_a": [
+      {
+       "code": 475168,
+       "name": "Jo\u00e3o Pedro",
+       "p": 0.366,
+       "xg": 0.456
+      }
+     ],
+     "scorers_h": [
+      {
+       "code": 586309,
+       "name": "Barry",
+       "p": 0.627,
+       "xg": 0.986
+      },
+      {
+       "code": 215413,
+       "name": "Dewsbury-Hall",
+       "p": 0.323,
+       "xg": 0.39
+      }
+     ],
+     "top_a": [
+      {
+       "code": 475168,
+       "name": "Jo\u00e3o Pedro",
+       "p": 0.366
+      },
+      {
+       "code": 244850,
+       "name": "Rogers",
+       "p": 0.285
+      },
+      {
+       "code": 244851,
+       "name": "Palmer",
+       "p": 0.182
+      }
+     ],
+     "top_h": [
+      {
+       "code": 586309,
+       "name": "Barry",
+       "p": 0.627
+      },
+      {
+       "code": 215413,
+       "name": "Dewsbury-Hall",
+       "p": 0.323
+      },
+      {
+       "code": 242898,
+       "name": "Johnson",
+       "p": 0.169
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "65": {
+     "away": "Hull City",
+     "away_id": 11,
+     "basis": "model",
+     "fixture": 65,
+     "home": "Fulham",
+     "home_id": 10,
+     "kickoff": "2026-10-17T14:00:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.357,
+      "cs_h": 0.316,
+      "h": 0,
+      "la": 1.152,
+      "lh": 1.029,
+      "pA": 0.385,
+      "pD": 0.292,
+      "pH": 0.323,
+      "res": "A"
+     },
+     "scorers_a": [
+      {
+       "code": 540324,
+       "name": "Belloumi",
+       "p": 0.329,
+       "xg": 0.399
+      }
+     ],
+     "scorers_h": [],
+     "top_a": [
+      {
+       "code": 540324,
+       "name": "Belloumi",
+       "p": 0.329
+      },
+      {
+       "code": 169432,
+       "name": "McBurnie",
+       "p": 0.202
+      },
+      {
+       "code": 146426,
+       "name": "Ajayi",
+       "p": 0.181
+      }
+     ],
+     "top_h": [
+      {
+       "code": 551466,
+       "name": "Gonzalo",
+       "p": 0.28
+      },
+      {
+       "code": 577725,
+       "name": "King",
+       "p": 0.205
+      },
+      {
+       "code": 571779,
+       "name": "Palacios",
+       "p": 0.126
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "66": {
+     "away": "Man Utd",
+     "away_id": 16,
+     "basis": "model",
+     "fixture": 66,
+     "home": "Leeds",
+     "home_id": 13,
+     "kickoff": "2026-10-18T13:00:00Z",
+     "market": null,
+     "model": {
+      "a": 0,
+      "cs_a": 0.222,
+      "cs_h": 0.322,
+      "h": 1,
+      "la": 1.133,
+      "lh": 1.504,
+      "pA": 0.286,
+      "pD": 0.256,
+      "pH": 0.458,
+      "res": "H"
+     },
+     "scorers_a": [],
+     "scorers_h": [
+      {
+       "code": 177815,
+       "name": "Calvert-Lewin",
+       "p": 0.413,
+       "xg": 0.532
+      }
+     ],
+     "top_a": [
+      {
+       "code": 446008,
+       "name": "Mbeumo",
+       "p": 0.338
+      },
+      {
+       "code": 141746,
+       "name": "B.Fernandes",
+       "p": 0.293
+      },
+      {
+       "code": 430871,
+       "name": "Cunha",
+       "p": 0.105
+      }
+     ],
+     "top_h": [
+      {
+       "code": 177815,
+       "name": "Calvert-Lewin",
+       "p": 0.413
+      },
+      {
+       "code": 226182,
+       "name": "Bogle",
+       "p": 0.277
+      },
+      {
+       "code": 466525,
+       "name": "Stach",
+       "p": 0.186
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "67": {
+     "away": "Ipswich Town",
+     "away_id": 12,
+     "basis": "model",
+     "fixture": 67,
+     "home": "Man City",
+     "home_id": 15,
+     "kickoff": "2026-10-17T14:00:00Z",
+     "market": null,
+     "model": {
+      "a": 0,
+      "cs_a": 0.023,
+      "cs_h": 0.423,
+      "h": 3,
+      "la": 0.86,
+      "lh": 3.791,
+      "pA": 0.045,
+      "pD": 0.081,
+      "pH": 0.874,
+      "res": "H"
+     },
+     "scorers_a": [],
+     "scorers_h": [
+      {
+       "code": 223094,
+       "name": "Haaland",
+       "p": 0.791,
+       "xg": 1.568
+      },
+      {
+       "code": 466052,
+       "name": "Cherki",
+       "p": 0.472,
+       "xg": 0.639
+      },
+      {
+       "code": 209244,
+       "name": "Foden",
+       "p": 0.289,
+       "xg": 0.341
+      }
+     ],
+     "top_a": [
+      {
+       "code": 543968,
+       "name": "Emersonn",
+       "p": 0.228
+      },
+      {
+       "code": 455084,
+       "name": "Davis",
+       "p": 0.2
+      },
+      {
+       "code": 474120,
+       "name": "Enciso",
+       "p": 0.112
+      }
+     ],
+     "top_h": [
+      {
+       "code": 223094,
+       "name": "Haaland",
+       "p": 0.791
+      },
+      {
+       "code": 466052,
+       "name": "Cherki",
+       "p": 0.472
+      },
+      {
+       "code": 209244,
+       "name": "Foden",
+       "p": 0.289
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "68": {
+     "away": "Aston Villa",
+     "away_id": 2,
+     "basis": "model",
+     "fixture": 68,
+     "home": "Newcastle",
+     "home_id": 17,
+     "kickoff": "2026-10-17T16:30:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.182,
+      "cs_h": 0.247,
+      "h": 2,
+      "la": 1.397,
+      "lh": 1.701,
+      "pA": 0.317,
+      "pD": 0.236,
+      "pH": 0.448,
+      "res": "H"
+     },
+     "scorers_a": [
+      {
+       "code": 122806,
+       "name": "McGinn",
+       "p": 0.288,
+       "xg": 0.339
+      }
+     ],
+     "scorers_h": [
+      {
+       "code": 216646,
+       "name": "Wissa",
+       "p": 0.437,
+       "xg": 0.575
+      },
+      {
+       "code": 200089,
+       "name": "Willock",
+       "p": 0.324,
+       "xg": 0.392
+      }
+     ],
+     "top_a": [
+      {
+       "code": 122806,
+       "name": "McGinn",
+       "p": 0.288
+      },
+      {
+       "code": 517052,
+       "name": "N.Jackson",
+       "p": 0.274
+      },
+      {
+       "code": 195546,
+       "name": "Buend\u00eda",
+       "p": 0.25
+      }
+     ],
+     "top_h": [
+      {
+       "code": 216646,
+       "name": "Wissa",
+       "p": 0.437
+      },
+      {
+       "code": 200089,
+       "name": "Willock",
+       "p": 0.324
+      },
+      {
+       "code": 201666,
+       "name": "Barnes",
+       "p": 0.247
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "69": {
+     "away": "Arsenal",
+     "away_id": 1,
+     "basis": "model",
+     "fixture": 69,
+     "home": "Nott'm Forest",
+     "home_id": 18,
+     "kickoff": "2026-10-18T15:30:00Z",
+     "market": null,
+     "model": {
+      "a": 1,
+      "cs_a": 0.451,
+      "cs_h": 0.279,
+      "h": 0,
+      "la": 1.275,
+      "lh": 0.797,
+      "pA": 0.477,
+      "pD": 0.29,
+      "pH": 0.233,
+      "res": "A"
+     },
+     "scorers_a": [
+      {
+       "code": 223340,
+       "name": "Saka",
+       "p": 0.356,
+       "xg": 0.441
+      }
+     ],
+     "scorers_h": [],
+     "top_a": [
+      {
+       "code": 223340,
+       "name": "Saka",
+       "p": 0.356
+      },
+      {
+       "code": 184029,
+       "name": "\u00d8degaard",
+       "p": 0.219
+      },
+      {
+       "code": 219847,
+       "name": "Havertz",
+       "p": 0.213
+      }
+     ],
+     "top_h": [
+      {
+       "code": 456512,
+       "name": "Ndoye",
+       "p": 0.189
+      },
+      {
+       "code": 463034,
+       "name": "Delap",
+       "p": 0.16
+      },
+      {
+       "code": 222531,
+       "name": "Gibbs-White",
+       "p": 0.144
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    },
+    "70": {
+     "away": "Coventry City",
+     "away_id": 7,
+     "basis": "model",
+     "fixture": 70,
+     "home": "Spurs",
+     "home_id": 19,
+     "kickoff": "2026-10-19T19:00:00Z",
+     "market": null,
+     "model": {
+      "a": 0,
+      "cs_a": 0.392,
+      "cs_h": 0.452,
+      "h": 1,
+      "la": 0.794,
+      "lh": 0.937,
+      "pA": 0.293,
+      "pD": 0.336,
+      "pH": 0.372,
+      "res": "H"
+     },
+     "scorers_a": [],
+     "scorers_h": [
+      {
+       "code": 154566,
+       "name": "Solanke",
+       "p": 0.203,
+       "xg": 0.227
+      }
+     ],
+     "top_a": [
+      {
+       "code": 480457,
+       "name": "Rudoni",
+       "p": 0.183
+      },
+      {
+       "code": 210156,
+       "name": "Awoniyi",
+       "p": 0.116
+      },
+      {
+       "code": 173878,
+       "name": "Dasilva",
+       "p": 0.084
+      }
+     ],
+     "top_h": [
+      {
+       "code": 154566,
+       "name": "Solanke",
+       "p": 0.203
+      },
+      {
+       "code": 232787,
+       "name": "Gallagher",
+       "p": 0.159
+      },
+      {
+       "code": 469142,
+       "name": "Van Hecke",
+       "p": 0.142
+      }
+     ],
+     "updated": "2026-10-13T01:55+00:00"
+    }
+   }
+  }
+ }
+}
