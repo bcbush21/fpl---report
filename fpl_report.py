@@ -118,6 +118,12 @@ def load_data():
 
 # ---------------------------------------------------------------- helpers
 
+def has_ended(f):
+    """A match counts once it has ended. FPL's 'finished' flag waits for bonus points to be confirmed,
+    often a day later, so 'finished_provisional' is the earlier signal that the game is over."""
+    return bool(f.get("finished") or f.get("finished_provisional"))
+
+
 def num(x, default=0.0):
     try:
         return float(x)
@@ -140,7 +146,7 @@ def build_teams(d):
                        "gp": 0, "gf": 0, "ga": 0, "xg": 0.0, "xgc90": None, "results": []}
              for t in d["boot"]["teams"]}
 
-    done = [f for f in d["fixtures"] if f.get("finished") and f.get("team_h_score") is not None]
+    done = [f for f in d["fixtures"] if has_ended(f) and f.get("team_h_score") is not None]
     for f in sorted(done, key=lambda f: f.get("kickoff_time") or ""):
         h, a = teams[f["team_h"]], teams[f["team_a"]]
         hs, as_ = f["team_h_score"], f["team_a_score"]
@@ -196,7 +202,7 @@ def build_teams(d):
         t["run"] = []
     for f in sorted(d["fixtures"], key=lambda f: (f.get("event") or 99, f.get("kickoff_time") or "")):
         ev = f.get("event")
-        if not ev or not (d["next"] <= ev <= last_gw) or f.get("finished"):
+        if not ev or not (d["next"] <= ev <= last_gw) or has_ended(f):
             continue
         for side, opp, home in ((f["team_h"], f["team_a"], True), (f["team_a"], f["team_h"], False)):
             o = teams[opp]
@@ -312,7 +318,7 @@ def build_players(d, teams):
         log = []
         for h in hist or []:
             fx = fx_by_id.get(h.get("fixture"))
-            if not fx or not fx.get("finished"):
+            if not fx or not has_ended(fx):
                 continue
             home = fx["team_h"] == el["team"]
             log.append(dict(gw=fx.get("event"), mins=h.get("minutes", 0), pts=h.get("total_points", 0),
@@ -642,7 +648,7 @@ def matchups(d, teams):
     lg_att = sum(t["att_rating"] for t in played) / len(played)
     lg_def = sum(t["def_rating"] for t in played) / len(played)
     games = []
-    for f in sorted((f for f in d["fixtures"] if f.get("event") == d["next"] and not f.get("finished")),
+    for f in sorted((f for f in d["fixtures"] if f.get("event") == d["next"] and not has_ended(f)),
                     key=lambda f: f.get("kickoff_time") or ""):
         h, a = teams[f["team_h"]], teams[f["team_a"]]
         lam_h = lg_att * (h["att_rating"] / lg_att) * (a["def_rating"] / lg_def) * HOME_BOOST
