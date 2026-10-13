@@ -1793,23 +1793,31 @@ def benchmark_section(d, players, squad):
         last3 = [v for _, v, _, _ in wk[-3:]]
         l3 = sum(last3) / len(last3) if last3 else 0
         bm = pooled[p["pos"]]
-        if avg_pp > bm:
-            above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
-            fa_rows.append(dict(p=p, wk=wk, avg=avg_pp, l3=l3, bm=bm, gap=avg_pp - bm, above=above))
+        above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
+        fa_rows.append(dict(p=p, wk=wk, avg=avg_pp, l3=l3, bm=bm, gap=round(avg_pp - bm, 1) + 0.0, above=above))
     fa_rows.sort(key=lambda r: -r["gap"])
     fa_html = ""
     for pos, label in (("GK", "Goalkeepers"), ("DEF", "Defenders"), ("MID", "Midfielders"), ("FWD", "Forwards")):
-        rs = [r for r in fa_rows if r["p"]["pos"] == pos][:6]
+        everyone = [r for r in fa_rows if r["p"]["pos"] == pos]
+        rs = [r for r in everyone if r["gap"] > 0][:6]
+        note = ""
         if not rs:
+            # nobody beats the bar: say so and show the closest options instead of hiding the position
+            rs = everyone[:4]
+            note = ('<p class="note">No free agent at this position is beating the league average right now. '
+                    'These are the closest options.</p>')
+        if not rs:
+            fa_html += (f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>'
+                        '<p class="empty">No free agents with enough minutes to compare.</p>')
             continue
         fcols = [("Player", lambda r: who(r["p"])),
                  ("Each gameweek", cols[1][1]),
                  ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
                  ("Last 3 GWs", lambda r: f'{r["l3"]:.1f}<span class="sub2">{"rising" if r["l3"] > r["avg"] + 1 else "falling" if r["l3"] < r["avg"] - 1 else "steady"}</span>'),
-                 ("Gap", lambda r: f'<span class="bignum pos">{r["gap"]:+.1f}</span>'),
+                 ("Gap", lambda r: f'<span class="bignum {"pos" if r["gap"] > 0 else "neg" if r["gap"] < 0 else "mut"}">{r["gap"]:+.1f}</span>'),
                  ("Weeks above", lambda r: f'{r["above"]}/{len(r["wk"])}'),
                  (f"Next {HORIZON}", lambda r: pill(next5(r["p"], TEAMS)[0]))]
-        fa_html += f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>{table(rs, fcols, False)}'
+        fa_html += f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>{note}{table(rs, fcols, False)}'
 
     return f"""<section id="vsleague"><h2>Me vs the league</h2>
 <p class="note">The benchmark is the average points scored by players who actually counted for your opponents each
