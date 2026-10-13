@@ -1311,8 +1311,27 @@ def pois(k, lam):
     return math.exp(-lam) * lam ** k / math.factorial(k)
 
 
+DC_RHO = -0.13  # Dixon-Coles: plain Poisson underrates 0-0 and 1-1, this corrects it
+
+
 def score_grid(lh, la, n=8):
-    return {(i, j): pois(i, lh) * pois(j, la) for i in range(n) for j in range(n)}
+    """Probability of every scoreline, with the Dixon-Coles low-score correction so draws
+    get their real share instead of being systematically underpredicted."""
+    g = {}
+    for i in range(n):
+        for j in range(n):
+            v = pois(i, lh) * pois(j, la)
+            if (i, j) == (0, 0):
+                v *= 1 - lh * la * DC_RHO
+            elif (i, j) == (0, 1):
+                v *= 1 + lh * DC_RHO
+            elif (i, j) == (1, 0):
+                v *= 1 + la * DC_RHO
+            elif (i, j) == (1, 1):
+                v *= 1 - DC_RHO
+            g[(i, j)] = max(v, 0.0)
+    total = sum(g.values())
+    return {k: v / total for k, v in g.items()}
 
 
 def outcome_of(h, a):
@@ -1330,7 +1349,9 @@ def pick_from_lambdas(lh, la):
     res = max(probs, key=probs.get)
     (h, a), _ = max(((k, v) for k, v in grid.items() if outcome_of(*k) == res), key=lambda kv: kv[1])
     return dict(h=h, a=a, res=res, pH=round(probs["H"], 3), pD=round(probs["D"], 3), pA=round(probs["A"], 3),
-                lh=round(lh, 3), la=round(la, 3), cs_h=round(math.exp(-la), 3), cs_a=round(math.exp(-lh), 3))
+                lh=round(lh, 3), la=round(la, 3),
+                cs_h=round(sum(v for (i, j), v in grid.items() if j == 0), 3),
+                cs_a=round(sum(v for (i, j), v in grid.items() if i == 0), 3))
 
 
 def fit_lambdas(pH, pD, pA):
@@ -1552,7 +1573,7 @@ def predictions_section(log, players):
                  f'<div class="sc"><h4>Goalscorer picks</h4><div class="scg">'
                  f'<div><b>{pct(scorer_t["sh"], scorer_t["sp"])}</b><span>Picks who scored</span></div>'
                  f'<div><b>{scorer_t["sh"]}/{scorer_t["sp"]}</b><span>Hits / picks</span></div></div></div></div>'
-                 '<p class="note">For scale: always picking the home team gets about 45% of results right, '
+                 '<p class="note">Each match gets whichever result is most likely, draws included. For scale: always picking the home team gets about 45% of results right, '
                  'and exact scores land roughly 10% of the time even for good models.</p>')
 
     def scorer_list(xs):
