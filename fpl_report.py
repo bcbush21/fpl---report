@@ -318,6 +318,7 @@ def build_players(d, teams):
             p["dc_hit"] = max(0.0, min(1.0, (p["dc90"] - 0.6 * thr) / (0.8 * thr))) if thr and p["dc90"] else 0.0
             p["dc_source"] = "estimate"
         p["apps"] = len(apps)
+        p["ppg"] = p["total"] / max(t["gp"], 1)
         # game-by-game log for the squad review
         log = []
         for h in hist or []:
@@ -335,51 +336,11 @@ def build_players(d, teams):
     return players
 
 
-def project(p, teams, lg_xgc):
-    """Expected FPL points per upcoming fixture, built from the pieces Ben cares about."""
-    if p["status"] in ("i", "s", "u", "n") or p["mins"] < 90:
-        p["proj_next"], p["proj_run"], p["proj_parts"] = 0.0, 0.0, {}
-        return
-    t = teams[p["tid"]]
-    play = p["start_rate"]
-    if p["chance"] is not None and p["chance"] < 100:
-        play *= p["chance"] / 100
-    long_game = min(p["avg_mins"] / 90, 1.0)
-
-    def one(fx):
-        att = fx["att"]
-        lam = t["xgc90"] * fx["dfn"]          # goals we expect to concede
-        p_cs = math.exp(-lam)
-        parts = dict(
-            appear=2.0,
-            goals=p["xg90"] * long_game * att * GOAL_PTS[p["pos"]],
-            assists=p["xa90"] * long_game * att * 3,
-            cs=p_cs * CS_PTS[p["pos"]] * (p["full90_rate"] if p["pos"] in ("GK", "DEF") else 1),
-            dc=p["dc_hit"] * 2,
-            conceded=-(lam / 2) if p["pos"] in ("GK", "DEF") else 0.0,
-            saves=p["saves90"] / 3 if p["pos"] == "GK" else 0.0,
-            bonus=p["bonus90"],
-        )
-        return {k: v * play for k, v in parts.items()}, p_cs
-
-    runs = [one(fx) for fx in t["run"]]
-    p["proj_run"] = round(sum(sum(r[0].values()) for r in runs), 1)
-    if runs:
-        first_gw = t["run"][0]["gw"]
-        nxt = [r for r, fx in zip(runs, t["run"]) if fx["gw"] == first_gw]
-        p["proj_next"] = round(sum(sum(r[0].values()) for r in nxt), 1)
-        p["proj_parts"] = runs[0][0]
-        p["cs_next"] = runs[0][1]
-    else:
-        p["proj_next"], p["proj_parts"], p["cs_next"] = 0.0, {}, 0.0
-    p["cs_avg"] = sum(r[1] for r in runs) / len(runs) if runs else 0.0
-
-
 def rank_and_tag(players, squad_ids):
-    """Rank everyone within their position, then tag Core players who should be protected."""
+    """Rank everyone within their position by actual points per game, then tag Core players."""
     for pos in POS.values():
         group = sorted((p for p in players.values() if p["pos"] == pos and p["mins"] >= 270),
-                       key=lambda p: p["proj_run"], reverse=True)
+                       key=lambda p: p["ppg"], reverse=True)
         n = len(group) or 1
         for i, p in enumerate(group, 1):
             p["pos_rank"], p["pos_pct"] = i, i / n
@@ -413,28 +374,6 @@ def finishing_verdict(p):
         return "Slightly clinical"
     return "In line"
 
-
-def flags(p, teams):
-    out = []
-    if p.get("core"):
-        out.append("Core: keep" if not p.get("kept") else "On your keep list")
-    if p["status"] != "a" or (p["chance"] is not None and p["chance"] < 100):
-        out.append(f"{STATUS.get(p['status'], p['status'])}: {p['news'] or 'no detail'}")
-    if p["gp"] and p["start_rate"] < 0.6 and p["pos"] != "GK":
-        out.append(f"Rotation risk ({p['starts']}/{p['gp']} starts)")
-    t = teams[p["tid"]]
-    ease = t["def_ease"] if p["pos"] in ("GK", "DEF") else t["att_ease"]
-    lab = ease_label(ease)
-    if lab in ("Tough", "Very tough", "Blank"):
-        out.append(f"{lab} next {HORIZON}")
-    elif lab == "Easy":
-        out.append(f"Easy next {HORIZON}")
-    v = finishing_verdict(p)
-    if v.startswith(("Due", "Running")):
-        out.append(v)
-    if p["pos"] in ("DEF", "MID") and p["dc_hit"] >= 0.5:
-        out.append(f"DC banker ({p['dc_hit']:.0%})")
-    return out
 
 # ---------------------------------------------------------------- season charts
 
@@ -797,49 +736,13 @@ On average you score {abs(vs_avg):.1f} pts per week {'more' if vs_avg >= 0 else 
 {league_lines(d)}</section>"""
 
 
-# ---------------------------------------------------------------- injuries, returns and position battles
+# ---------------------------------------------------------------- lineup links and position battles
 
-RADAR_TOP = 100  # watch players inside the top N of FPL's preseason draft rankings
 LINKS = [
     ("Predicted lineups (RotoWire)", "https://www.rotowire.com/soccer/lineups.php"),
     ("Injury table (Premier Injuries)", "https://www.premierinjuries.com/injury-table.php"),
     ("Team news (Fantasy Football Scout)", "https://www.fantasyfootballscout.co.uk/team-news/"),
 ]
-MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
-
-
-def now_utc():
-    return datetime.datetime.now(datetime.timezone.utc)
-
-
-def parse_ts(ts):
-    try:
-        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-
-
-def expected_back(p):
-    """Return date from FPL news such as 'Knee injury - Expected back 7 Nov', or its news_return field."""
-    import re
-    m = re.search(r"[Ee]xpected back (\d{1,2}) ([A-Za-z]{3})", p["news"] or "")
-    today = now_utc().date()
-    if m and m.group(2).lower() in MONTHS:
-        day, mon = int(m.group(1)), MONTHS[m.group(2).lower()]
-        year = today.year + (1 if mon < today.month - 2 else 0)
-        try:
-            return datetime.date(year, mon, day)
-        except ValueError:
-            return None
-    ts = parse_ts(p.get("news_return"))
-    return ts.date() if ts else None
-
-
-def days_ago(ts):
-    t = parse_ts(ts)
-    return (now_utc() - t).days if t else None
-
-
 def links_html():
     return '<div class="links">' + "".join(
         f'<a href="{u}" target="_blank" rel="noopener">{esc(n)} ↗</a>' for n, u in LINKS) + "</div>"
@@ -883,90 +786,6 @@ def battle_note(p, b):
     return txt
 
 
-def radar_rows(players):
-    rows = []
-    for p in players.values():
-        if p["draft_rank"] > RADAR_TOP:
-            continue
-        news = (p["news"] or "").lower()
-        if any(k in news for k in ("joined", "loan", "departed", "left the club", "transferred")):
-            continue
-        back = expected_back(p)
-        updated = days_ago(p["news_added"])
-        chance = p["chance"]
-        if p["status"] in ("i", "s", "u") or chance == 0:
-            cat = "out"
-        elif p["status"] == "d" or (chance is not None and chance < 100):
-            cat = "doubt"
-        elif updated is not None and updated <= 14 and p["start_rate"] < 0.7:
-            cat = "cleared"   # news recently cleared and not yet a regular
-        elif p["gp"] >= 3 and p["start_rate"] < 0.5 and p["log"] and p["log"][-1]["mins"] > 0:
-            cat = "cleared"   # back and building minutes
-        else:
-            continue
-        rows.append(dict(p=p, cat=cat, back=back, updated=updated))
-    order = {"cleared": 0, "doubt": 1, "out": 2}
-    rows.sort(key=lambda r: (order[r["cat"]], bool(r["p"]["owner"]), r["p"]["draft_rank"]))
-    return rows
-
-
-def radar_section(players):
-    rows = radar_rows(players)
-    today = now_utc().date()
-    titles = {"cleared": ("Back or just cleared", "Fit now but not yet a regular starter. The window to grab them is closing."),
-              "doubt": ("Close to returning", "Flagged doubtful or with a percentage chance. Could feature this week or next."),
-              "out": ("Out for now", "Ruled out. Worth stashing the best ones if you have a spare bench spot.")}
-    blocks = []
-    for cat in ("cleared", "doubt", "out"):
-        rs = [r for r in rows if r["cat"] == cat]
-        if not rs:
-            continue
-
-        def ret(r):
-            if r["back"]:
-                d = (r["back"] - today).days
-                when = "any day" if d <= 0 else f"in {d} day{'s' if d != 1 else ''}"
-                return f'<span class="bignum" style="font-size:16px">{r["back"]:%b %d}</span><span class="sub2">{when}</span>'
-            return '<span class="mut">No date</span>'
-
-        cols = [("Player", lambda r: who(r["p"])),
-                ("Preseason rank", lambda r: f'<span class="tag">#{r["p"]["draft_rank"]}</span>'),
-                ("Owner", lambda r: owner_cell(r["p"])),
-                ("Status", lambda r: f'<span class="why">{esc(r["p"]["news"] or "Cleared, no current news")}</span>'
-                                     + (f'<span class="sub2">{r["p"]["chance"]}% chance next round</span>'
-                                        if r["p"]["chance"] is not None else "")),
-                ("Expected back", ret),
-                ("News updated", lambda r: f'{r["updated"]} days ago' if r["updated"] is not None else "-"),
-                ("Minutes", lambda r: f'{r["p"]["mins"]}<span class="sub2">{r["p"]["starts"]} starts</span>')]
-        table_rows = [dict(r, mine=r["p"]["mine"]) for r in rs]
-        title, note = titles[cat]
-        blocks.append(f'<div class="card"><h3>{title} <span class="cnt">{len(rs)}</span></h3>'
-                      f'<p class="note">{note}</p>{table(table_rows, cols)}</div>')
-    free = sum(1 for r in rows if not r["p"]["owner"])
-    return f"""<section id="radar"><h2>Injury return radar</h2>
-<p class="note">Every top-{RADAR_TOP} player (by FPL's preseason draft rankings) who is injured, doubtful or just back,
-checked against Hope Bros ownership. {free} of {len(rows)} are free agents right now; they're listed first in each group.
-Return dates come from FPL's injury news. Before a deadline, confirm with the sites below.</p>
-{links_html()}
-{''.join(blocks) or '<p class="empty">No top players are injured or returning right now.</p>'}</section>"""
-
-
-def radar_tips(players):
-    tips = []
-    today = now_utc().date()
-    for r in radar_rows(players):
-        p = r["p"]
-        if p["owner"] or p["draft_rank"] > 60:
-            continue
-        soon = r["cat"] == "cleared" or (r["back"] and (r["back"] - today).days <= 14) or \
-            (r["cat"] == "doubt" and (p["chance"] or 0) >= 50)
-        if soon:
-            when = ("He's fit now" if r["cat"] == "cleared" else
-                    f"Expected back {r['back']:%b %d}" if r["back"] else f"{p['chance']}% chance next round")
-            tips.append(tip("waiver", f"Grab {p['name']} before he's back",
-                            f"Preseason #{p['draft_rank']} and nobody in Hope Bros owns him. {when}. "
-                            "Stash him now; once he's starting, someone else will claim him.", p))
-    return tips[:3]
 
 
 # ---------------------------------------------------------------- squad review
@@ -1074,20 +893,6 @@ def review(p, teams, players, ranks):
     if p["pos"] in ("DEF", "MID") and p["dc_hit"] >= 0.5 and len(played) >= 2:
         notes.append(f"Hits the defensive contribution bonus in {p['dc_hit']:.0%} of games, a near-free 2 points.")
 
-    if t["run"]:
-        nx = t["run"][0]
-        opp = teams[nx["opp_id"]]
-        lab = ease_label(t["def_ease" if p["pos"] in ("GK", "DEF") else "att_ease"])
-        side = "attack" if p["pos"] in ("GK", "DEF") else "defense"
-        orank = att_rank.get(opp["id"]) if p["pos"] in ("GK", "DEF") else def_rank.get(opp["id"])
-        qual = ""
-        if orank:
-            if (p["pos"] in ("GK", "DEF") and orank >= 15) or (p["pos"] not in ("GK", "DEF") and orank >= 15):
-                qual = f", whose {side} ranks #{orank} of 20, a good matchup"
-            elif orank <= 5:
-                qual = f", whose {side} ranks #{orank} of 20, a tough one"
-        notes.append(f"Next: {opp['full']} ({'home' if nx['home'] else 'away'}){qual}. Next {HORIZON} overall: {lab.lower()}.")
-
     battle = position_battle(p, players)
     if battle:
         notes.insert(0, battle_note(p, battle))
@@ -1095,9 +900,9 @@ def review(p, teams, players, ranks):
     # ---- verdict
     alt = None
     free = [q for q in players.values() if q["pos"] == p["pos"] and not q["owner"] and q["mins"] >= 270
-            and q["start_rate"] >= 0.5 and q["proj_run"] > 0]
+            and q["start_rate"] >= 0.5 and q["status"] == "a"]
     if free:
-        alt = max(free, key=lambda q: q["proj_run"])
+        alt = max(free, key=lambda q: q["ppg"])
     long_out = any(k in news.lower() for k in ("unknown return", "joined", "loan", "left the club", "departed"))
     hot_return = returned and recent_played and (recent_ppa >= 6 or (p90 or 0) >= 8)
 
@@ -1128,7 +933,7 @@ def review(p, teams, players, ranks):
             why = f"One of your top scorers this season ({total_pts} pts). Keep starting him."
         v = "core"
     elif lost_spot or (len(games) >= 3 and recent_share < 0.35 and mins_share < 0.5 and not returned):
-        if alt and alt["proj_run"] > p["proj_run"] + 2:
+        if alt and alt["ppg"] > p["ppg"] + 1.5:
             v, why = "replace", f"Not getting minutes. {alt['name']} ({alt['team']}) is a free agent who plays."
         else:
             v, why = "monitor", "Minutes have dried up. Watch team news before starting him."
@@ -1136,9 +941,9 @@ def review(p, teams, players, ranks):
         v, why = "form", f"Scoring {recent_ppa:.1f} a game lately, up from {ppa:.1f}. Ride the form."
     elif len(played) >= 4 and recent_ppa - ppa <= -2 and recent_share < mins_share:
         v, why = "monitor", "Points and minutes both trending down. Not a drop yet, but watch him."
-    elif alt and ppa < 3 and len(played) >= 3 and alt["proj_run"] > p["proj_run"] + 2.5:
-        v, why = "replace", (f"Averaging {ppa:.1f} pts a game. {alt['name']} ({alt['team']}) projects "
-                             f"{alt['proj_run']} vs his {p['proj_run']} over the next {HORIZON}.")
+    elif alt and ppa < 3 and len(played) >= 3 and alt["ppg"] > ppa + 1.5:
+        v, why = "replace", (f"Averaging {ppa:.1f} pts a game. {alt['name']} ({alt['team']}) is a free agent "
+                             f"averaging {alt['ppg']:.1f} and starting regularly.")
     else:
         v, why = "keep", (f"Averaging {ppa:.1f} pts a game, with 60+ minutes in {full} of {n} games. "
                           "Doing his job, no reason to change.")
@@ -1146,6 +951,36 @@ def review(p, teams, players, ranks):
     return dict(v=v, why=why, notes=notes, total=total_pts, ppa=ppa, p90=p90, total_mins=total_mins,
                 n=n, full=full, apps=len(played), mins_share=mins_share,
                 alt=alt if v == "replace" and not battle else None, battle=battle)
+
+
+def next5(p, teams):
+    """Next fixtures rated for this player. Attackers want opponents who concede a lot;
+    keepers and defenders want opponents who score little. Uses each team's goal ratings
+    (season blended with the last 5 matches), the same numbers as the team table."""
+    t = teams[p["tid"]]
+    attack = p["pos"] in ("MID", "FWD")
+    key = "def_rating" if attack else "att_rating"
+    played_t = [x for x in teams.values() if x["gp"]]
+    avg = sum(x[key] for x in played_t) / len(played_t) if played_t else 1.3
+    chips, ratios = [], []
+    for x in t["run"]:
+        o = teams[x["opp_id"]]
+        val = o[key]
+        ratio = val / avg if attack else avg / max(val, 0.1)
+        ratios.append(ratio)
+        cls = "good" if ratio >= 1.12 else "bad" if ratio <= 0.9 else ""
+        verdict = "Good" if cls == "good" else "Hard" if cls == "bad" else "Average"
+        where = "Home" if x["home"] else "Away"
+        verb = "concede" if attack else "score"
+        tip_txt = (f"GW{x['gw']}: vs {o['full']} ({where.lower()}). {o['full']} {verb} {val:.1f} goals a game "
+                   f"(league average {avg:.1f}). {verdict} matchup for {'scoring' if attack else 'a clean sheet'}.")
+        chips.append(f'<span class="chip {cls}" title="{esc(tip_txt)}"><span class="cgw">GW{x["gw"]} · {where}</span>'
+                     f'<span class="cmain">{badge(o["id"], 18)}<b>{esc(o["name"])}</b></span>'
+                     f'<span class="cval"><small>{val:.1f}</small> {verb}s/g</span></span>')
+    overall = ease_label(sum(ratios) / len(ratios)) if ratios else "Blank"
+    what = ("Opponents' goals conceded per game. Higher is better for him." if attack else
+            "Opponents' goals scored per game. Lower is better for him.")
+    return overall, f'<div class="chips">{"".join(chips) or "No fixtures"}</div>', what
 
 
 def gw_bars(p, teams):
@@ -1190,8 +1025,8 @@ def squad_review_section(squad, players, teams):
         if r["alt"]:
             a = r["alt"]
             alt = (f'<div class="alt">{photo(a, 36)}<div><b>Option: {esc(a["name"])}</b>'
-                   f'<div class="tm">{badge(a["tid"], 14)}{esc(a["team"])} · free agent · projects {a["proj_run"]} '
-                   f'over next {HORIZON}</div></div></div>')
+                   f'<div class="tm">{badge(a["tid"], 14)}{esc(a["team"])} · free agent · {a["ppg"]:.1f} pts a game, '
+                   f'{a["starts"]} starts</div></div></div>')
         if r["battle"] and not r["battle"]["q"]["mine"]:
             q = r["battle"]["q"]
             how = (f"owned by {esc(q['owner'])}, trade target" if q["owner"] else "free agent, pick him up")
@@ -1200,9 +1035,11 @@ def squad_review_section(squad, players, teams):
                    f'{q["starts"]} starts this season</div></div></div>')
         p90 = f'{r["p90"]:.1f}' if r["p90"] is not None else "-"
         notes = "".join(f"<li>{esc(x)}</li>" for x in r["notes"])
+        n5_label, n5_chips, n5_what = next5(p, teams)
         cards.append(f'''<div class="rv">
 <div class="rv-top">{photo(p, 60)}<div class="pc-id"><div class="pc-name">{esc(p["name"])}</div>
-<div class="tm">{badge(p["tid"], 16)}{esc(teams[p["tid"]]["full"])} · {p["pos"]}{" · " + rank_str(p) if p.get("pos_rank") else ""}</div></div>
+<div class="tm">{badge(p["tid"], 16)}{esc(teams[p["tid"]]["full"])} · {p["pos"]}{" · " + rank_str(p) if p.get("pos_rank") else ""}</div>
+<div class="pc-slot">{"Starting XI" if p.get("slot") == "XI" else "Bench"}</div></div>
 <span class="vp {color}">{label}</span></div>
 <p class="rv-why">{esc(r["why"])}</p>
 <div class="rv-stats">
@@ -1213,90 +1050,19 @@ def squad_review_section(squad, players, teams):
 <div><span class="k">60+ min</span><span class="v">{r["full"]}/{r["n"]}</span></div></div>
 <div class="rv-lbl">Points by gameweek <span class="lg2"><i class="full"></i>60+ min <i class="part"></i>under 60 <i class="dnp"></i>didn't play</span></div>
 {gw_bars(p, teams)}
+<div class="rv-lbl">Next {HORIZON} games {pill(n5_label)}</div>
+<p class="note" style="margin:-8px 0 0;font-size:12px">{n5_what}</p>
+{n5_chips}
 {f'<ul class="rv-notes">{notes}</ul>' if notes else ''}{alt}</div>''')
-    return f"""<section id="review"><h2>Squad review</h2>
-<p class="note">Every player on your team: what he's actually delivered, how reliable his minutes are, which way his
-form is heading, and the context behind the numbers. Sorted from strongest to weakest call. Hover a bar for the match details.</p>
+    return f"""<section id="squad"><h2>My squad</h2>
+<p class="note">Every player on your team: what he's scored each gameweek since the start of the season, how reliable his
+minutes are, the context behind the numbers, and whether his next {HORIZON} games are good matchups. Sorted from
+strongest call to weakest. Hover a bar or a fixture box for details.</p>
 <div class="vsum">{summary}</div>
 <div class="rvgrid">{''.join(cards)}</div></section>"""
 
 
 # ---------------------------------------------------------------- advice
-
-def tip(kind, title, body, *people):
-    return dict(kind=kind, title=title, body=body, people=[p for p in people if p])
-
-
-def advice(squad, players, teams):
-    tips = []
-    xi, bench = squad[:11], squad[11:]
-
-    for p in xi:
-        if p["status"] in ("i", "s", "u", "n") or (p["chance"] is not None and p["chance"] <= 25):
-            why = p["news"] or (f"{p['chance']}% chance of playing" if p["chance"] is not None
-                                else STATUS.get(p["status"]))
-            tips.append(tip("bench", f"Bench {p['name']}", why, p))
-
-    for b in bench:
-        same = [p for p in xi if p["pos"] == b["pos"]]
-        if same:
-            worst = min(same, key=lambda p: p["proj_next"])
-            if b["proj_next"] > worst["proj_next"] + 0.8:
-                tips.append(tip("start", f"Start {b['name']} over {worst['name']}",
-                                f"Projected {b['proj_next']} pts next gameweek vs {worst['proj_next']}.",
-                                b, worst))
-
-    # only free agents with a real sample of minutes, so one cameo doesn't look like a star
-    free = [p for p in players.values() if not p["owner"] and p["proj_run"] > 0
-            and p["mins"] >= 270 and p["start_rate"] >= 0.5]
-    # the squad review has the context (returning from injury, form, core); never offer a drop it disagrees with
-    ranks = team_ranks(teams)
-    protected = {p["id"] for p in squad if review(p, teams, players, ranks)["v"] in ("start", "form", "core", "hold")}
-    for pos in ("GK", "DEF", "MID", "FWD"):
-        mine = [p for p in squad if p["pos"] == pos and not p["core"] and p["id"] not in protected]
-        if not mine:
-            continue
-        weakest = min(mine, key=lambda p: p["proj_run"])
-        best = max((p for p in free if p["pos"] == pos), key=lambda p: p["proj_run"], default=None)
-        if best and best["proj_run"] > weakest["proj_run"] + 2.5:
-            why = []
-            if pos in ("DEF", "MID") and best["dc_hit"] >= 0.4:
-                why.append(f"hits defensive contribution in {best['dc_hit']:.0%} of games")
-            why.append(f"{ease_label(teams[best['tid']]['def_ease' if pos in ('GK', 'DEF') else 'att_ease']).lower()} fixtures")
-            if finishing_verdict(best).startswith("Due"):
-                why.append(f"{best['g'] + best['a']} G+A from {best['xgi']:.1f} xGI, so returns are due")
-            tips.append(tip("waiver", f"Pick up {best['name']}, drop {weakest['name']}",
-                            f"Projected {best['proj_run']} pts over the next {HORIZON} vs {weakest['proj_run']}. "
-                            f"Why: {', '.join(why)}.", best, weakest))
-
-    for p in squad:
-        ga = p["g"] + p["a"]
-        if p["gi_diff"] >= 1.5 and p["pos_rank"]:
-            if p["core"] and p["xgi"] >= 1.0:
-                tips.append(tip("keep", f"Keep {p['name']}",
-                                f"{ga} G+A from {p['xgi']:.1f} xGI, so some cooling is likely, but his underlying "
-                                f"numbers still rank {rank_str(p)}. He's a core piece.", p))
-            elif not p["core"] and p["pos_pct"] > 0.5:
-                # hot streak propping up below-average underlying numbers: the real sell-high case
-                tips.append(tip("sell", f"Sell-high: {p['name']}",
-                                f"{ga} G+A from only {p['xgi']:.1f} xGI, and his underlying numbers rank "
-                                f"{rank_str(p)}. If someone offers a better-rated player off his points, take it.", p))
-        if finishing_verdict(p).startswith("Due") and p["start_rate"] >= 0.7:
-            tips.append(tip("hold", f"Hold {p['name']}",
-                            f"{ga} G+A from {p['xgi']:.1f} xGI ({rank_str(p)}). The chances are there, "
-                            "returns should follow.", p))
-
-    for p in squad:
-        b = position_battle(p, players)
-        if b and b["replaced"]:
-            q = b["q"]
-            target = (f"{q['name']} is owned by {q['owner']}; offer a trade." if q["owner"] and not q["mine"] else
-                      f"{q['name']} is a free agent; pick him up." if not q["owner"] else "")
-            tips.insert(0, tip("bench", f"Rotation risk: {p['name']}",
-                               f"He started while {q['name']} was out, and {q['name']} started GW{b['last_gw']} ahead of him. "
-                               + target, p, q))
-    tips.extend(radar_tips(players))
-    return tips
 
 # ---------------------------------------------------------------- rendering
 
@@ -1374,71 +1140,6 @@ def pct_bar(v):
     return f'<div class="bar"><span style="width:{v * 100:.0f}%"></span></div><span class="num">{v:.0%}</span>'
 
 
-def run_chips(t, side):
-    """One chip per upcoming match. side='def': number = goals the opponent CREATES per game (low is good).
-    side='att': number = goals the opponent ALLOWS per game (high is good)."""
-    played = [x for x in TEAMS.values() if x.get("gp")]
-    avg = (sum(x["xg_pg"] for x in played) / len(played) if side == "def"
-           else sum(x["xgc90"] for x in played) / len(played)) if played else 1.3
-    chips = []
-    for x in t["run"]:
-        opp = TEAMS.get(x["opp_id"], {})
-        where = "Home" if x["home"] else "Away"
-        val = x["o_xgc"] if side == "att" else x["o_xg"]
-        # color follows the number shown, so the same opponent always looks the same
-        good = val >= avg * 1.12 if side == "att" else val <= avg * 0.9
-        bad = val <= avg * 0.9 if side == "att" else val >= avg * 1.12
-        cls = "good" if good else "bad" if bad else ""
-        verdict = "good matchup" if good else "hard matchup" if bad else "average matchup"
-        unit = "xG for" if side == "def" else "xG allowed"
-        if side == "def":
-            tip_txt = (f"GW{x['gw']}: vs {opp.get('full', x['opp'])} ({where.lower()}). They create {val:.1f} "
-                       f"expected goals per game (league average {avg:.1f}). {verdict.capitalize()} for a clean sheet.")
-        else:
-            tip_txt = (f"GW{x['gw']}: vs {opp.get('full', x['opp'])} ({where.lower()}). They allow {val:.1f} "
-                       f"expected goals per game (league average {avg:.1f}). {verdict.capitalize()} for scoring.")
-        chips.append(f'<span class="chip {cls}" title="{esc(tip_txt)}">'
-                     f'<span class="cgw">GW{x["gw"]} · {where}</span>'
-                     f'<span class="cmain">{badge(x["opp_id"], 18)}<b>{esc(x["opp"])}</b></span>'
-                     f'<span class="cval"><small>{val:.1f}</small> {unit}</span></span>')
-    return f'<div class="chips">{"".join(chips) or "No fixtures"}</div>'
-
-
-def chip_key(side):
-    """Plain-English key shown above each fixture table."""
-    if side == "def":
-        return ('<div class="ckey"><b>How to read each box:</b> the gameweek, home or away, the opponent, and '
-                '<b>how many expected goals that opponent creates per game</b>. Lower is better for your keepers and defenders. '
-                '<span class="chip good"><span class="cval"><small>0.9</small> xG for</span></span> weak attack, good clean sheet chance '
-                '<span class="chip"><span class="cval"><small>1.3</small> xG for</span></span> about average '
-                '<span class="chip bad"><span class="cval"><small>1.9</small> xG for</span></span> dangerous attack. '
-                'Hover or tap a box for the full sentence. The overall run also accounts for home and away.</div>')
-    return ('<div class="ckey"><b>How to read each box:</b> the gameweek, home or away, the opponent, and '
-            '<b>how many expected goals that opponent allows per game</b>. Higher is better for your midfielders and forwards. '
-            '<span class="chip good"><span class="cval"><small>1.9</small> xG allowed</span></span> leaky defense, good for goals '
-            '<span class="chip"><span class="cval"><small>1.3</small> xG allowed</span></span> about average '
-            '<span class="chip bad"><span class="cval"><small>0.9</small> xG allowed</span></span> tight defense. '
-            'Hover or tap a box for the full sentence. The overall run also accounts for home and away.</div>')
-
-
-def fixture_section(teams):
-    ranked_def = sorted((t for t in teams.values() if t["n_fix"]), key=lambda t: t["def_ease"], reverse=True)
-    ranked_att = sorted((t for t in teams.values() if t["n_fix"]), key=lambda t: t["att_ease"], reverse=True)
-
-    def block(ranked, key, side, title, note):
-        cols = [("Team", team_cell),
-                ("Overall run", lambda t: pill(ease_label(t[key]))),
-                (f"Next {HORIZON} opponents", lambda t: run_chips(t, side))]
-        return (f'<div class="card"><h3>{title}</h3><p class="note">{note}</p>{chip_key(side)}'
-                f'<h4>Best runs</h4>{table(ranked[:6], cols, False)}'
-                f'<h4>Toughest runs</h4>{table(ranked[-4:][::-1], cols, False)}</div>')
-
-    return (block(ranked_def, "def_ease", "def", "Goalkeepers and defenders: clean sheet outlook",
-                  "Which teams face the weakest attacks over the next few weeks. Own defenders from teams near the top.")
-            + block(ranked_att, "att_ease", "att", "Midfielders and forwards: goal outlook",
-                    "Which teams face the leakiest defenses over the next few weeks. Own attackers from teams near the top."))
-
-
 def finishing_section(players):
     outfield = [p for p in players.values() if p["pos"] != "GK" and p["mins"] >= 180]
     cols = [("Player", who), ("Rank", lambda p: f'<span class="tag">{rank_str(p)}</span>'),
@@ -1463,118 +1164,21 @@ def finishing_section(players):
             f'{table(hot, cols)}</div>')
 
 
-def defense_section(players, teams):
-    def cols_for(pos):
-        thr = DC_THRESHOLD[pos]
-        return [
-            ("Player", who), ("Owner", owner_cell),
-            ("Starts", lambda p: f'{big(p["starts"])}<span class="sub2">of {p["gp"]}</span>'),
-            ("Full 90s", lambda p: pct_bar(p["full90_rate"])),
-            (f"Actions / 90", lambda p: f'{big(format(p["dc90"], ".1f"))}<span class="sub2">need {thr}</span>'),
-            ("Hits DC bonus", lambda p: pct_bar(p["dc_hit"]) + ("<sup>*</sup>" if p["dc_source"] == "estimate" else "")),
-            ("Clean sheet next", lambda p: f'<span class="num">{p.get("cs_next", 0):.0%}</span>'),
-            ("Fixtures", lambda p: pill(ease_label(teams[p['tid']]['def_ease']))),
-            (f"Proj {HORIZON} GWs", lambda p: big(p["proj_run"])),
-        ]
-
-    defs = sorted((p for p in players.values() if p["pos"] == "DEF" and p["mins"] >= 180
-                   and p["status"] == "a"),
-                  key=lambda p: (p["start_rate"] >= 0.8, p["proj_run"]), reverse=True)
-    my_defs = sorted((p for p in players.values() if p["pos"] == "DEF" and p["mine"]),
-                     key=lambda p: p["proj_run"], reverse=True)
-    fa_defs = [p for p in defs if not p["owner"]][:6]
-    mids = sorted((p for p in players.values() if p["pos"] == "MID" and p["mins"] >= 180 and p["status"] == "a"),
-                  key=lambda p: p["dc_hit"], reverse=True)[:8]
-
-    return ('<div class="explain"><b>How it works:</b> a defender earns <b>+2 points</b> when he makes 10 or more '
-            'clearances, blocks, interceptions and tackles in a match. Midfielders and forwards need 12, and recoveries count. '
-            'It only pays if he\'s on the pitch, so starts and full 90s matter as much as the rate. '
-            '<b>Hits DC bonus</b> = share of his matches where he reached it. <sup>*</sup> = estimated from season totals.</div>'
-            f'<div class="card"><h3>Your defenders</h3>{table(my_defs, cols_for("DEF"), False)}</div>'
-            f'<div class="card"><h3>Most reliable defenders in the league</h3>{table(defs[:12], cols_for("DEF"))}</div>'
-            f'<div class="card"><h3>Best free agent defenders</h3>{table(fa_defs, cols_for("DEF"))}</div>'
-            '<div class="card"><h3>Midfielders who bank DC points</h3>'
-            '<p class="note">Defensive mids rarely haul, but hitting the bonus in 60%+ of games is close to a free extra point every week.</p>'
-            f'{table(mids, cols_for("MID"))}</div>')
-
-
-def squad_cards(squad, teams):
-    def card(p):
-        t = teams[p["tid"]]
-        lab = ease_label(t["def_ease" if p["pos"] in ("GK", "DEF") else "att_ease"])
-        fl = [f for f in flags(p, teams) if not f.startswith(("Easy", "Tough", "Very tough"))]
-        def fcls(f):
-            if f.startswith(("Core", "On your")):
-                return " ok"
-            if f.startswith(("DC banker", "Due")):
-                return " good"
-            return ""
-        flag_html = "".join(f'<span class="flag{fcls(f)}">{esc(f)}</span>' for f in fl)
-        dc = (f'<div><span class="k">DC hit</span><span class="v">{p["dc_hit"]:.0%}</span></div>'
-              if p["pos"] != "GK" else
-              f'<div><span class="k">Saves/90</span><span class="v">{p["saves90"]:.1f}</span></div>')
-        return f'''<div class="pc{' bench' if p['slot'] != 'XI' else ''}">
-  <div class="pc-top">{photo(p, 64)}<div class="pc-id">
-    <div class="pc-name">{esc(p['name'])}</div>
-    <div class="tm">{badge(p['tid'], 18)}{esc(t['full'])} · {p['pos']}</div>
-    <div class="pc-slot">{p['slot']} · {rank_str(p)}</div></div>
-    <div class="pc-proj"><span>{p['proj_next']}</span><small>next GW</small></div></div>
-  <div class="pc-stats">
-    <div><span class="k">Points</span><span class="v">{p['total']}</span></div>
-    <div><span class="k">Starts</span><span class="v">{p['starts']}/{p['gp']}</span></div>
-    <div><span class="k">G+A / xGI</span><span class="v">{p['g'] + p['a']} / {p['xgi']:.1f}</span></div>
-    {dc}
-  </div>
-  <div class="pc-fix">{pill(lab)}{run_chips(t, 'def' if p['pos'] in ('GK', 'DEF') else 'att')}</div>
-  {f'<div class="flags">{flag_html}</div>' if flag_html else ''}
-</div>'''
-    xi = "".join(card(p) for p in squad if p["slot"] == "XI")
-    bench = "".join(card(p) for p in squad if p["slot"] != "XI")
-    return f'<h3 class="lbl">Starting XI</h3><div class="grid">{xi}</div><h3 class="lbl">Bench</h3><div class="grid">{bench}</div>'
-
-
 def market_section(players, teams):
     out = ""
     for pos, label in (("GK", "Goalkeepers"), ("DEF", "Defenders"), ("MID", "Midfielders"), ("FWD", "Forwards")):
         cols = [("Player", who),
+                ("Points", lambda p: f'{big(p["total"])}<span class="sub2">{p["ppg"]:.1f} a game</span>'),
                 ("Starts", lambda p: f'{big(p["starts"])}<span class="sub2">of {p["gp"]}</span>'),
                 ("G+A / xGI", lambda p: f'{big(p["g"] + p["a"])}<span class="sub2">xGI {p["xgi"]:.1f}</span>'),
-                ("Fixtures", lambda p, pos=pos: pill(ease_label(teams[p['tid']]['def_ease' if pos in ('GK', 'DEF') else 'att_ease']))),
-                (f"Proj {HORIZON} GWs", lambda p: big(p["proj_run"]))]
+                (f"Next {HORIZON}", lambda p: pill(next5(p, teams)[0]))]
         if pos in ("DEF", "MID"):
-            cols.insert(3, ("Hits DC bonus", lambda p: pct_bar(p["dc_hit"])))
-        fa = sorted((p for p in players.values() if p["pos"] == pos and not p["owner"] and p["proj_run"] > 0),
-                    key=lambda p: p["proj_run"], reverse=True)[:5]
+            cols.insert(4, ("Hits DC bonus", lambda p: pct_bar(p["dc_hit"])))
+        fa = sorted((p for p in players.values() if p["pos"] == pos and not p["owner"] and p["status"] == "a"
+                     and p["mins"] >= 270 and p["start_rate"] >= 0.5),
+                    key=lambda p: p["ppg"], reverse=True)[:6]
         out += f'<div class="card"><h3>{label}</h3>{table(fa, cols, False)}</div>'
     return out
-
-
-def trade_section(players):
-    cols = [("Player", who), ("Owner", owner_cell), ("Rank", lambda p: f'<span class="tag">{rank_str(p)}</span>'),
-            ("G+A / xGI", lambda p: f'{big(p["g"] + p["a"])}<span class="sub2">xGI {p["xgi"]:.1f}</span>'),
-            ("Verdict", lambda p: verdict_pill(finishing_verdict(p))),
-            (f"Proj {HORIZON} GWs", lambda p: big(p["proj_run"]))]
-    rows = sorted((p for p in players.values() if p["owned_by_other"] and p["proj_run"] > 0),
-                  key=lambda p: p["proj_run"], reverse=True)[:12]
-    return f'<div class="card">{table(rows, cols, False)}</div>'
-
-
-TIP_STYLE = {"bench": ("Bench", "t-red"), "start": ("Lineup", "t-blue"), "waiver": ("Waiver", "t-green"),
-             "keep": ("Keep", "t-blue"), "sell": ("Sell-high", "t-amber"), "hold": ("Hold", "t-green")}
-
-
-def tip_cards(tips):
-    if not tips:
-        return '<div class="tip"><div class="tip-body"><div class="tip-title">No obvious moves this week</div>' \
-               '<p>Your squad looks set. Check back after team news.</p></div></div>'
-    out = []
-    for t in tips:
-        label, color = TIP_STYLE.get(t["kind"], ("Note", "t-blue"))
-        faces = "".join(photo(p, 56) for p in t["people"])
-        out.append(f'<div class="tip {color}"><div class="faces">{faces}</div><div class="tip-body">'
-                   f'<span class="tip-kind">{label}</span><div class="tip-title">{esc(t["title"])}</div>'
-                   f'<p>{esc(t["body"])}</p></div></div>')
-    return "".join(out)
 
 
 CSS = """
@@ -1659,7 +1263,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1670,73 +1274,42 @@ def render(d, players, teams):
     squad = [players[pk["element"]] for pk in sorted(d["picks"], key=lambda x: x["position"])]
     for i, p in enumerate(squad):
         p["slot"] = "XI" if i < 11 else f"Bench {i - 10}"
-
-    injuries = [p for p in squad if p["status"] != "a" or (p["chance"] is not None and p["chance"] < 100)]
-    inj = "".join(f'<div class="inj">{photo(p, 48)}<div><div class="nm">{esc(p["name"])}</div>'
-                  f'<div class="note" style="margin:0">{esc(p["news"] or STATUS.get(p["status"], ""))}'
-                  + ("" if "chance" in (p["news"] or "") or p["chance"] is None
-                     else f' · {p["chance"]}% chance of playing')
-                  + '</div></div></div>'
-                  for p in injuries) or '<p class="empty">No injury news on your squad.</p>'
     e = d["entry"]
-    gw_range = f"GW{d['next']}–{d['next'] + HORIZON - 1}"
-    proj_xi = sum(p["proj_next"] for p in squad[:11])
+    rows, n_teams = season_data(d)
+    place = f"{ordinal(rows[-1]['place'])} of {n_teams}" if rows else "-"
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">
 <title>Boofla Report</title><style>{CSS}</style></head><body>
 <header><div class="in">
 <h1>{esc(e['name'])} · Gameweek {d['next']}</h1>
-<p>Updated {datetime.datetime.now(datetime.timezone.utc):%A %b %d, %H:%M} UTC · fixtures cover {gw_range}</p>
+<p>Updated {datetime.datetime.now(datetime.timezone.utc):%A %b %d, %H:%M} UTC</p>
 <div class="stats">
 <div class="stat"><b>{e.get('overall_points', '?')}</b><span>Total points</span></div>
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
-<div class="stat"><b>{proj_xi:.0f}</b><span>Projected next GW (XI)</span></div>
+<div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#review">Squad review</a><a href="#radar">Injury radar</a><a href="#fixtures">Fixtures</a>
-<a href="#finishing">xG vs actual</a><a href="#defense">Defensive contribution</a>
-<a href="#market">Free agents</a><a href="#trades">Trade targets</a></div></nav>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a>
+<a href="#finishing">xG vs actual</a><a href="#market">Free agents</a></div></nav>
 <main>
 
 {season_section(d)}
 
 {teams_section(d, teams, players)}
 
-<section id="advice"><h2>This week's advice</h2>
-<p class="note">Lineup calls, waiver moves and keep or sell reads. Core players are never suggested as drops.</p>
-<div class="tips">{tip_cards(advice(squad, players, teams))}</div>
-<div class="card"><h3>Injuries and news</h3>{inj}</div></section>
-
-<section id="squad"><h2>My squad</h2>
-<p class="note">The big blue number is projected points next gameweek: chance of starting, xG and xA against this
-opponent, clean sheet odds, defensive contribution, saves and bonus.</p>
-{squad_cards(squad, teams)}</section>
-
 {squad_review_section(squad, players, teams)}
-
-{radar_section(players)}
-
-<section id="fixtures"><h2>Fixture outlook, {gw_range}</h2>
-<p class="note">Who has the easy and hard runs coming up, and why, adjusted for home and away.</p>
-{fixture_section(teams)}</section>
 
 <section id="finishing"><h2>xG and xA vs actual returns</h2>
 <p class="note">+/- is actual minus expected. Positive = finishing above their chances, negative = due for more.</p>
 {finishing_section(players)}</section>
 
-<section id="defense"><h2>Defensive contribution</h2>
-<p class="note">Defenders who play 90 minutes and rack up actions bank points even when the clean sheet goes.</p>
-{defense_section(players, teams)}</section>
-
 <section id="market"><h2>Best free agents</h2>
-<p class="note">Ranked by projected points over the next {HORIZON} gameweeks.</p>
+<p class="note">Regular starters nobody in Hope Bros owns, ranked by points per game this season, with how good their
+next {HORIZON} matchups look.</p>
 {market_section(players, teams)}</section>
 
-<section id="trades"><h2>Trade targets on other teams</h2>
-{trade_section(players)}</section>
-
-<footer>Fixture ease is relative to an average run. Team xG = sum of its players' xG; team xGC = its main keeper's
-xG conceded per 90. Data from the FPL Draft and FPL APIs. Photos and badges from the Premier League.</footer>
+<footer>Matchup ratings use each team's goals scored and conceded per game, blending the full season with their last 5
+matches. Data from the FPL Draft and FPL APIs. Photos and badges from the Premier League.</footer>
 </main></body></html>"""
 
 
@@ -1745,10 +1318,8 @@ def main():
         d = load_data()
     except requests.RequestException as err:
         sys.exit(f"Could not reach the FPL API: {err}")
-    teams, _, lg_xgc = build_teams(d)
+    teams, _, _ = build_teams(d)
     players = build_players(d, teams)
-    for p in players.values():
-        project(p, teams, lg_xgc)
     rank_and_tag(players, [pk["element"] for pk in d["picks"]])
     out = Path(os.environ.get("REPORT_PATH") or Path(__file__).with_name("fpl_report.html"))
     out.parent.mkdir(parents=True, exist_ok=True)
