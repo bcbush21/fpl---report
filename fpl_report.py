@@ -240,6 +240,13 @@ def build_teams(d):
         else:
             t["att_rating"], t["def_rating"] = season_att, season_def
 
+    # league position, same order as the table: points, goal difference, goals scored, name
+    for i, t in enumerate(sorted(teams.values(), key=lambda t: (-t["pts"], -t["gd"], -t["gf"], t["full"])), 1):
+        t["table_pos"] = i
+    t_count = len(teams)
+    for t in teams.values():
+        t["table_n"] = t_count
+
     played = [t for t in teams.values() if t["gp"]]
     lg_xg = sum(t["xg_pg"] for t in played) / len(played) if played else 1.3
     lg_xgc = sum(t["xgc90"] for t in played) / len(played) if played else 1.3
@@ -646,7 +653,10 @@ sort('pts','desc');}})();
 </script>"""
 
 
-def matchups(d, teams):
+def matchups(d, teams, log=None):
+    """Next gameweek's games. When bookmaker odds are logged for a fixture, its goals, result chances,
+    most likely score and clean sheet odds come from the bookmakers; otherwise from the stats model."""
+    logged = (log or {}).get("gws", {}).get(str(d["next"]), {}).get("matches", {})
     played = [t for t in teams.values() if t["gp"]]
     if not played:
         return []
@@ -658,7 +668,10 @@ def matchups(d, teams):
         h, a = teams[f["team_h"]], teams[f["team_a"]]
         lam_h = lg_att * (h["att_rating"] / lg_att) * (a["def_rating"] / lg_def) * HOME_BOOST
         lam_a = lg_att * (a["att_rating"] / lg_att) * (h["def_rating"] / lg_def) / HOME_BOOST
-        games.append(dict(h=h, a=a, lh=lam_h, la=lam_a, cs_h=math.exp(-lam_a), cs_a=math.exp(-lam_h),
+        mk = (logged.get(str(f["id"])) or {}).get("market")
+        pick = mk or pick_from_lambdas(lam_h, lam_a)
+        games.append(dict(h=h, a=a, lh=pick["lh"], la=pick["la"], cs_h=pick["cs_h"], cs_a=pick["cs_a"],
+                          pick=pick, src="odds" if mk else "model", fid=f["id"],
                           kickoff=f.get("kickoff_time")))
 
     # flag the standouts: clear thresholds, plus the top 3 of the week if they're close
@@ -688,8 +701,8 @@ def matchups(d, teams):
     return games
 
 
-def matchup_section(d, teams, players):
-    games = matchups(d, teams)
+def matchup_section(d, teams, players, log=None):
+    games = matchups(d, teams, log)
     if not games:
         return ""
     mine_by_team = {}
@@ -720,15 +733,21 @@ def matchup_section(d, teams, players):
         hot = " hot" if g["flags"] else ""
 
         def side(t, lam, cs, align):
+            pos = t.get("table_pos")
+            tier = "top" if pos and pos <= 4 else "bot" if pos and pos > t.get("table_n", 20) - 3 else ""
             return (f'<div class="ms {align}">{badge(t["id"], 48)}<div class="mn">{esc(t["full"])}</div>'
+                    f'<div class="mpos {tier}" title="League position">{ordinal(pos)} of {t.get("table_n", 20)}'
+                    f' · {t["pts"]} pts</div>'
                     f'<div class="fms">{form_chips(t)}</div>'
                     f'<div class="sub2">{cs:.0%} clean sheet</div></div>')
 
         cards.append((sort_key, day, f'''<div class="mc{hot}">
 <div class="mko">{ko}</div>
 <div class="mrow">{side(h, g["lh"], g["cs_h"], "l")}
-<div class="mscore"><span>{g["lh"]:.1f}</span><i>–</i><span>{g["la"]:.1f}</span><small>projected goals</small></div>
-{side(a, g["la"], g["cs_a"], "r")}</div>{flags}{mine_html}</div>'''))
+<div class="mscore"><span>{card_pick(g)[2]}</span><i>–</i><span>{card_pick(g)[3]}</span>
+<small>{"predicted score (odds)" if g["src"] == "odds" else "predicted score (model)"}</small></div>
+{side(a, g["la"], g["cs_a"], "r")}</div>
+{wdl_bar(g, h, a)}{flags}{mine_html}</div>'''))
 
     # earliest kickoff at the top, grouped under a heading for each day
     days_html, current = "", None
@@ -743,8 +762,11 @@ def matchup_section(d, teams, players):
         days_html += "</div>"
     flagged = sum(1 for g in games if g["flags"])
     return f"""<div class="card"><h3>Gameweek {d['next']} matchups</h3>
-<p class="note">Projected goals come from each side's attack rating against the other's defense rating, adjusted
-for home advantage. Ratings blend the full season (60%) with the last 5 matches (40%), so recent form counts.
+<p class="note">Each game shows the bookmakers' chances of a home win, draw or away win, the favourite, and the
+predicted score (the likeliest score for the favourite result, so draws show when a draw is most likely), plus the
+three likeliest exact scorelines,
+worked out from the match result and over/under 2.5 goals odds averaged across firms. Where no odds are available yet,
+the card says so and uses the stats model instead. Clean sheet chances use the same numbers.
 {flagged} of {len(games)} games are flagged: <b class="g">Goals likely</b> = strong attack vs leaky defense,
 <b class="b">Clean sheet spot</b> = tight defense vs weak attack. Games are in kickoff order (Eastern time).</p>
 <p class="note" style="margin-bottom:6px">Projections can't see this week's lineup news. Check before the deadline:</p>
@@ -752,9 +774,47 @@ for home advantage. Ratings blend the full season (60%) with the last 5 matches 
 {days_html}</div>"""
 
 
-def teams_section(d, teams, players):
+def card_pick(g):
+    """Result chances straight from the bookmakers when we have them (fitted model only turns them into
+    scorelines), the favourite result, and the likeliest score for that result."""
+    pk = g["pick"]
+    if g["src"] == "odds" and pk.get("oH") is not None:
+        probs = {"H": pk["oH"], "D": pk["oD"], "A": pk["oA"]}
+    else:
+        probs = {"H": pk["pH"], "D": pk["pD"], "A": pk["pA"]}
+    fav = max(probs, key=probs.get)
+    grid = score_grid(pk["lh"], pk["la"])
+    (h, a), _ = max(((k, v) for k, v in grid.items() if outcome_of(*k) == fav), key=lambda kv: kv[1])
+    return probs, fav, h, a
+
+
+def top_scores(g):
+    pk = g["pick"]
+    if pk.get("top"):
+        return pk["top"]
+    grid = score_grid(pk["lh"], pk["la"])
+    return [[i, j, v] for (i, j), v in sorted(grid.items(), key=lambda kv: -kv[1])[:3]]
+
+
+def wdl_bar(g, h, a):
+    pk = g["pick"]
+    probs, fav_k, _, _ = card_pick(g)
+    fav = (fav_k, probs[fav_k])
+    fav_lab = {"H": f"{h['name']} win", "D": "Draw", "A": f"{a['name']} win"}[fav[0]]
+    tops = " · ".join(f"{i}–{j} <i>{v:.0%}</i>" for i, j, v in top_scores(g))
+    src = (f"Bookmakers, {pk.get('books', 0)} firms averaged" if g["src"] == "odds"
+           else "Stats model: no bookmaker odds for this game yet")
+    return (f'<div class="mwdl"><div class="pbar"><span class="pb-h" style="width:{probs["H"]*100:.0f}%">{probs["H"]:.0%}</span>'
+            f'<span class="pb-d" style="width:{probs["D"]*100:.0f}%">{probs["D"]:.0%}</span>'
+            f'<span class="pb-a" style="width:{probs["A"]*100:.0f}%">{probs["A"]:.0%}</span></div>'
+            f'<div class="mwdl-l"><span>{esc(h["name"])} win</span><span>Draw</span><span>{esc(a["name"])} win</span></div>'
+            f'<div class="mwdl-s">Favourite: <b>{esc(fav_lab)} ({fav[1]:.0%})</b> · Likeliest scores: {tops}</div>'
+            f'<div class="mwdl-s">{esc(src)}</div></div>')
+
+
+def teams_section(d, teams, players, log=None):
     return (f'<section id="teams"><h2>Premier League teams and this week\'s matchups</h2>'
-            f'{team_table_section(teams)}{matchup_section(d, teams, players)}</section>')
+            f'{team_table_section(teams)}{matchup_section(d, teams, players, log)}</section>')
 
 
 def season_section(d):
@@ -1478,7 +1538,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\n.dchips{display:flex;gap:5px}.dcol{display:flex;flex-direction:column;align-items:center;gap:2px}\n.dcol small{font-size:10px;color:var(--muted)}\n.dchip{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;border-radius:7px;font-weight:800;font-size:13px;background:#eef1f6;color:var(--ink);cursor:default}\n.dchip.up{background:var(--green-soft);color:var(--green)}.dchip.down{background:var(--red-soft);color:var(--red)}\n.dchip.dnp{color:var(--muted);background:#f5f6f8}\n.bxt td{text-align:center;padding:10px 8px}.bxt td:first-child{text-align:left}\n.bx{border-radius:10px;background:#f3f5f9;border:3px solid #fff}\n.bx.up{background:#d8f2e0;color:var(--green)}.bx.down{background:#fbdcdc;color:var(--red)}\n.bx-word{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}\n.bx-gap{display:block;font-size:20px;font-weight:800;line-height:1.2}\n.bx-sub{display:block;font-size:11px;color:var(--muted);font-weight:600}\n.bxt tr.sum td{border-top:2px solid var(--line)}\n.rec{border-radius:10px;border:3px solid #fff}.rec.good{background:var(--green);color:#fff}\n.rec.bad{background:var(--red);color:#fff}.rec.even{background:#94a3b8;color:#fff}\n.rec-n{display:block;font-size:20px;font-weight:800}.rec-v{display:block;font-size:12px;font-weight:700;opacity:.9}\n@media (max-width:600px){.bxt{font-size:12px;table-layout:fixed}.bxt td,.bxt th{white-space:normal}.bxt td,.bxt th{padding:5px 2px}.bxt td:first-child{width:52px;font-size:12px}.bx-gap{font-size:15px}.bx-word{font-size:9px}.bx-sub{font-size:9px}.rec-n{font-size:15px}.rec-v{font-size:10px}.bx,.rec{border-width:2px}}\n.gbar.fut,.lg2 i.fut{background:repeating-linear-gradient(135deg,#d97706 0 4px,#f5b257 4px 8px)}\n.gb.pred .gv{color:#b45309}.gb.pred small{color:#b45309;font-weight:700}\n.gsep{width:2px;align-self:stretch;background:repeating-linear-gradient(180deg,#cbd5e1 0 4px,transparent 4px 8px);margin:0 4px}\n.gbadges{display:flex;gap:2px;min-height:16px;align-items:center}\n.mday{margin:26px 0 12px;font-size:15px;color:var(--navy);text-transform:none;letter-spacing:0;border-bottom:2px solid var(--line);padding-bottom:6px}\n.rts{display:flex;gap:6px;flex-wrap:wrap}\n.rt{flex:1;min-width:58px;max-width:90px;text-align:center;border-radius:10px;padding:6px 4px;background:#eef1f6;cursor:default}\n.rt b{display:block;font-size:18px;color:var(--ink)}.rt span{display:block;font-size:11px;font-weight:700;color:var(--muted)}\n.rt small{display:flex;align-items:center;justify-content:center;gap:3px;font-size:10px;color:var(--muted)}\n.rt.hi{background:var(--green-soft)}.rt.hi b,.rt.hi span{color:var(--green)}\n.rt.lo{background:var(--red-soft)}.rt.lo b,.rt.lo span{color:var(--red)}\n.cmp-tools{display:flex;flex-direction:column;gap:12px}.cmp-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}\n.cmp-row label{font-weight:700;color:var(--navy)}\n.cmp-row input,.cmp-row select{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}\n.cmp-row input[type=search]{flex:1;min-width:200px}.cmp-row input[type=checkbox]{width:18px;height:18px;padding:0;margin:0}\n.cmp-res{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}\n.cmp-r{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:8px 10px;cursor:pointer;font:inherit}.cmp-r:hover{border-color:var(--blue);background:var(--blue-soft)}\n.cmp-r > span:not(.ph){flex:1;min-width:0}.cmp-r b{display:block}.cmp-r small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}\n.cmp-r em{font-style:normal;font-weight:800;color:var(--blue);font-size:13px;white-space:nowrap}\n.cmp-bar{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;font-weight:700;color:var(--navy)}\n.cv{background:var(--navy);color:#fff;border-radius:16px;padding:16px 20px;margin:0 0 14px}\n.cv-k{display:inline-block;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-right:8px}.cv b{font-size:20px}.cv p{margin:8px 0 0;opacity:.92}\n.ct{table-layout:fixed}.ct th,.ct td{white-space:normal;vertical-align:top}\n.ct thead th{background:#fff;color:var(--ink);text-transform:none;letter-spacing:0;font-size:14px;border-bottom:2px solid var(--line)}\n.ct tbody th{text-align:left;color:var(--muted);font-size:12px;width:150px}.ct-l{width:150px}\n@media (max-width:600px){.ct tbody th,.ct-l{width:92px;font-size:11px}.ct td{font-size:14px}.ch{flex-direction:column;align-items:flex-start;gap:4px}.ch .ph{--s:40px!important}.ct th,.ct td{padding:8px 6px}.lgx{display:none}}\n.ct td{font-weight:800;font-size:16px}.ct td small{display:block;font-weight:600;font-size:11px;color:var(--muted)}\n.ct td.best{background:var(--green-soft);color:var(--green)}\n.ch{display:flex;gap:10px;align-items:center;position:relative}.ch b{display:block;font-size:15px}\n.ch small{display:flex;align-items:center;gap:4px;font-weight:600;color:var(--muted);font-size:12px}\n.cx{position:absolute;top:-6px;right:-4px;border:0;background:#eef1f6;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:16px;line-height:1}\n.cw{display:flex;align-items:flex-end;gap:3px;height:50px;margin-top:10px}.cw i{flex:1;max-width:14px;border-radius:3px 3px 1px 1px}\n.cw i.f,.lgx i.f{background:var(--blue2)}.cw i.p,.lgx i.p{background:#9ec5f4}.cw i.d,.lgx i.d{background:#d5dbe5}\n.cw i.x,.lgx i.x{background:repeating-linear-gradient(135deg,#d97706 0 3px,#f5b257 3px 6px)}\n.cmp-sep{width:1px;align-self:stretch;background:#cbd5e1;margin:0 2px}\n.lgx{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}\n.lgx i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:-3px}\n.ccs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.cc{font-size:11px;font-weight:700;background:#eef1f6;border-radius:6px;padding:2px 6px;color:var(--ink)}\n.cc small{display:inline;margin-left:2px;color:var(--muted)}.cc.good{background:var(--green-soft);color:var(--green)}.cc.bad{background:var(--red-soft);color:var(--red)}\n.cmp-add{border:1px solid var(--line);background:#fff;color:var(--blue);border-radius:999px;padding:2px 9px;font:700 11px/1.6 inherit;cursor:pointer;margin-left:8px;vertical-align:middle;white-space:nowrap}.cmp-add:hover{background:var(--blue-soft)}\n.rv-acts{display:flex;gap:6px;margin-top:6px}.rv-acts .cmp-add{margin-left:0}\n.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--navy);color:#fff;padding:10px 16px;border-radius:999px;font-weight:700;font-size:14px;opacity:0;pointer-events:none;transition:.2s;z-index:20}\n.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}\n.cand-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}\n.cand-tools{margin-bottom:10px}.cand-sortl,.cand-chk{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);font-weight:600}\n.cand-tw{max-height:560px;overflow:auto}.cand th{position:sticky;top:0;z-index:1}\n.cand td{white-space:normal}.cand td b{display:block;font-size:15px}.cand td small{display:block;font-size:12px;font-weight:700}\n.cand tr.cand-me td{background:var(--blue-soft)}.cand tr.cand-on td{background:#f2fbf5}\n.cand-btn{border:1px solid var(--blue);background:#fff;color:var(--blue);border-radius:999px;padding:5px 12px;font:700 12px/1.4 inherit;cursor:pointer;white-space:nowrap}\n.cand-btn.on{background:var(--green);border-color:var(--green);color:#fff}\n.cand-flag{display:inline-block;margin-left:4px;font-size:11px;font-weight:700;color:var(--amber);background:var(--amber-soft);border-radius:6px;padding:0 6px}\n.cand-btn-m{display:none;margin-top:4px}\n@media (max-width:600px){.cand th,.cand td{padding:8px 6px}.cand-head h3{font-size:16px}.cand-act{display:none}.cand-btn-m{display:inline-block}}\nnav a.on{background:var(--blue);color:#fff}nav a.on:hover{background:var(--blue)}\nmain > section{margin-top:28px}main > section[hidden]{display:none}\n.toast.go{pointer-events:auto;cursor:pointer}\n.rvgrid > *,.grid > *,.mgrid > *{min-width:0}\n@media (max-width:600px){.ms .fms{gap:3px}.ms .fm{width:19px;height:19px;font-size:10px;border-radius:5px}.mrow{gap:6px}.mscore span{font-size:24px}.mn{font-size:14px}.mc{padding:14px}}\nnav .ngrp{align-self:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:0 4px 0 10px;white-space:nowrap}nav .ngrp:first-child{padding-left:0}\n.glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:8px 0 12px}\n.glance div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}.glance b{display:block;font-size:24px;color:var(--navy)}\n.glance span{font-size:12px;color:var(--muted);font-weight:600}\n.rcgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:18px;margin-top:16px;align-items:start}.rcgrid > *{min-width:0}\n.rc{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px 20px;display:flex;flex-direction:column;gap:10px}\n.rc-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.rc-when{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}\n.rc-v{font-size:12px;font-weight:800;border-radius:999px;padding:3px 10px;white-space:nowrap}.rc-v.ok{background:#eef1f6;color:var(--muted)}\n.rc-v.surprise{background:var(--amber-soft);color:var(--amber)}.rc-v.upset{background:var(--red-soft);color:var(--red)}\n.rc-score{display:grid;grid-template-columns:auto 1fr auto 1fr auto;align-items:center;gap:10px}\n.rc-score b{font-size:16px}.rc-score b:nth-of-type(2){text-align:right}.rc-n{font-size:30px;font-weight:800;color:var(--navy);padding:0 6px}\n.rc-head{margin:0;font-weight:600;color:var(--navy)}\n.rc-exp{background:#f7f9fc;border-radius:10px;padding:8px 12px;font-size:14px}.rc-exp small{display:block;color:var(--muted);font-size:11px}\n.rc-k{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-right:6px}\n.rc-goals{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px;font-weight:600}.rc-goals > div:last-child{text-align:right}\n.rc-goals small{display:block;color:var(--muted);font-weight:500;font-size:12px}\n.rc h5{margin:6px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}\n.rc-who{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}\n.rc-who li{display:flex;align-items:center;gap:8px}.rc-who.up li span b{color:var(--green)}.rc-who.down li span b{color:var(--red)}\n.rc-notes{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:4px}\n.rc-notes li.up::marker{color:var(--green)}.rc-notes li.down::marker{color:var(--red)}\n.rc-notes li.av{list-style:none;margin-left:-18px;display:flex;gap:8px}.avi{width:18px;flex:none;text-align:center}\n.rc-mine{display:flex;flex-wrap:wrap;gap:6px}.rc-mine small{color:var(--muted);margin-left:2px}\n.rc-link{align-self:flex-start;color:var(--blue);font-weight:700;font-size:13px;text-decoration:none;margin-top:4px}\n@media (max-width:600px){.rcgrid{grid-template-columns:1fr}.rc{padding:14px}.rc-score b{font-size:14px}.rc-n{font-size:24px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\n.dchips{display:flex;gap:5px}.dcol{display:flex;flex-direction:column;align-items:center;gap:2px}\n.dcol small{font-size:10px;color:var(--muted)}\n.dchip{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;border-radius:7px;font-weight:800;font-size:13px;background:#eef1f6;color:var(--ink);cursor:default}\n.dchip.up{background:var(--green-soft);color:var(--green)}.dchip.down{background:var(--red-soft);color:var(--red)}\n.dchip.dnp{color:var(--muted);background:#f5f6f8}\n.bxt td{text-align:center;padding:10px 8px}.bxt td:first-child{text-align:left}\n.bx{border-radius:10px;background:#f3f5f9;border:3px solid #fff}\n.bx.up{background:#d8f2e0;color:var(--green)}.bx.down{background:#fbdcdc;color:var(--red)}\n.bx-word{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}\n.bx-gap{display:block;font-size:20px;font-weight:800;line-height:1.2}\n.bx-sub{display:block;font-size:11px;color:var(--muted);font-weight:600}\n.bxt tr.sum td{border-top:2px solid var(--line)}\n.rec{border-radius:10px;border:3px solid #fff}.rec.good{background:var(--green);color:#fff}\n.rec.bad{background:var(--red);color:#fff}.rec.even{background:#94a3b8;color:#fff}\n.rec-n{display:block;font-size:20px;font-weight:800}.rec-v{display:block;font-size:12px;font-weight:700;opacity:.9}\n@media (max-width:600px){.bxt{font-size:12px;table-layout:fixed}.bxt td,.bxt th{white-space:normal}.bxt td,.bxt th{padding:5px 2px}.bxt td:first-child{width:52px;font-size:12px}.bx-gap{font-size:15px}.bx-word{font-size:9px}.bx-sub{font-size:9px}.rec-n{font-size:15px}.rec-v{font-size:10px}.bx,.rec{border-width:2px}}\n.gbar.fut,.lg2 i.fut{background:repeating-linear-gradient(135deg,#d97706 0 4px,#f5b257 4px 8px)}\n.gb.pred .gv{color:#b45309}.gb.pred small{color:#b45309;font-weight:700}\n.gsep{width:2px;align-self:stretch;background:repeating-linear-gradient(180deg,#cbd5e1 0 4px,transparent 4px 8px);margin:0 4px}\n.gbadges{display:flex;gap:2px;min-height:16px;align-items:center}\n.mday{margin:26px 0 12px;font-size:15px;color:var(--navy);text-transform:none;letter-spacing:0;border-bottom:2px solid var(--line);padding-bottom:6px}\n.rts{display:flex;gap:6px;flex-wrap:wrap}\n.rt{flex:1;min-width:58px;max-width:90px;text-align:center;border-radius:10px;padding:6px 4px;background:#eef1f6;cursor:default}\n.rt b{display:block;font-size:18px;color:var(--ink)}.rt span{display:block;font-size:11px;font-weight:700;color:var(--muted)}\n.rt small{display:flex;align-items:center;justify-content:center;gap:3px;font-size:10px;color:var(--muted)}\n.rt.hi{background:var(--green-soft)}.rt.hi b,.rt.hi span{color:var(--green)}\n.rt.lo{background:var(--red-soft)}.rt.lo b,.rt.lo span{color:var(--red)}\n.cmp-tools{display:flex;flex-direction:column;gap:12px}.cmp-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}\n.cmp-row label{font-weight:700;color:var(--navy)}\n.cmp-row input,.cmp-row select{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}\n.cmp-row input[type=search]{flex:1;min-width:200px}.cmp-row input[type=checkbox]{width:18px;height:18px;padding:0;margin:0}\n.cmp-res{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}\n.cmp-r{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:8px 10px;cursor:pointer;font:inherit}.cmp-r:hover{border-color:var(--blue);background:var(--blue-soft)}\n.cmp-r > span:not(.ph){flex:1;min-width:0}.cmp-r b{display:block}.cmp-r small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}\n.cmp-r em{font-style:normal;font-weight:800;color:var(--blue);font-size:13px;white-space:nowrap}\n.cmp-bar{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;font-weight:700;color:var(--navy)}\n.cv{background:var(--navy);color:#fff;border-radius:16px;padding:16px 20px;margin:0 0 14px}\n.cv-k{display:inline-block;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-right:8px}.cv b{font-size:20px}.cv p{margin:8px 0 0;opacity:.92}\n.ct{table-layout:fixed}.ct th,.ct td{white-space:normal;vertical-align:top}\n.ct thead th{background:#fff;color:var(--ink);text-transform:none;letter-spacing:0;font-size:14px;border-bottom:2px solid var(--line)}\n.ct tbody th{text-align:left;color:var(--muted);font-size:12px;width:150px}.ct-l{width:150px}\n@media (max-width:600px){.ct tbody th,.ct-l{width:92px;font-size:11px}.ct td{font-size:14px}.ch{flex-direction:column;align-items:flex-start;gap:4px}.ch .ph{--s:40px!important}.ct th,.ct td{padding:8px 6px}.lgx{display:none}}\n.ct td{font-weight:800;font-size:16px}.ct td small{display:block;font-weight:600;font-size:11px;color:var(--muted)}\n.ct td.best{background:var(--green-soft);color:var(--green)}\n.ch{display:flex;gap:10px;align-items:center;position:relative}.ch b{display:block;font-size:15px}\n.ch small{display:flex;align-items:center;gap:4px;font-weight:600;color:var(--muted);font-size:12px}\n.cx{position:absolute;top:-6px;right:-4px;border:0;background:#eef1f6;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:16px;line-height:1}\n.cw{display:flex;align-items:flex-end;gap:3px;height:50px;margin-top:10px}.cw i{flex:1;max-width:14px;border-radius:3px 3px 1px 1px}\n.cw i.f,.lgx i.f{background:var(--blue2)}.cw i.p,.lgx i.p{background:#9ec5f4}.cw i.d,.lgx i.d{background:#d5dbe5}\n.cw i.x,.lgx i.x{background:repeating-linear-gradient(135deg,#d97706 0 3px,#f5b257 3px 6px)}\n.cmp-sep{width:1px;align-self:stretch;background:#cbd5e1;margin:0 2px}\n.lgx{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}\n.lgx i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:-3px}\n.ccs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.cc{font-size:11px;font-weight:700;background:#eef1f6;border-radius:6px;padding:2px 6px;color:var(--ink)}\n.cc small{display:inline;margin-left:2px;color:var(--muted)}.cc.good{background:var(--green-soft);color:var(--green)}.cc.bad{background:var(--red-soft);color:var(--red)}\n.cmp-add{border:1px solid var(--line);background:#fff;color:var(--blue);border-radius:999px;padding:2px 9px;font:700 11px/1.6 inherit;cursor:pointer;margin-left:8px;vertical-align:middle;white-space:nowrap}.cmp-add:hover{background:var(--blue-soft)}\n.rv-acts{display:flex;gap:6px;margin-top:6px}.rv-acts .cmp-add{margin-left:0}\n.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--navy);color:#fff;padding:10px 16px;border-radius:999px;font-weight:700;font-size:14px;opacity:0;pointer-events:none;transition:.2s;z-index:20}\n.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}\n.cand-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}\n.cand-tools{margin-bottom:10px}.cand-sortl,.cand-chk{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);font-weight:600}\n.cand-tw{max-height:560px;overflow:auto}.cand th{position:sticky;top:0;z-index:1}\n.cand td{white-space:normal}.cand td b{display:block;font-size:15px}.cand td small{display:block;font-size:12px;font-weight:700}\n.cand tr.cand-me td{background:var(--blue-soft)}.cand tr.cand-on td{background:#f2fbf5}\n.cand-btn{border:1px solid var(--blue);background:#fff;color:var(--blue);border-radius:999px;padding:5px 12px;font:700 12px/1.4 inherit;cursor:pointer;white-space:nowrap}\n.cand-btn.on{background:var(--green);border-color:var(--green);color:#fff}\n.cand-flag{display:inline-block;margin-left:4px;font-size:11px;font-weight:700;color:var(--amber);background:var(--amber-soft);border-radius:6px;padding:0 6px}\n.cand-btn-m{display:none;margin-top:4px}\n@media (max-width:600px){.cand th,.cand td{padding:8px 6px}.cand-head h3{font-size:16px}.cand-act{display:none}.cand-btn-m{display:inline-block}}\nnav a.on{background:var(--blue);color:#fff}nav a.on:hover{background:var(--blue)}\nmain > section{margin-top:28px}main > section[hidden]{display:none}\n.toast.go{pointer-events:auto;cursor:pointer}\n.rvgrid > *,.grid > *,.mgrid > *{min-width:0}\n@media (max-width:600px){.ms .fms{gap:3px}.ms .fm{width:19px;height:19px;font-size:10px;border-radius:5px}.mrow{gap:6px}.mscore span{font-size:24px}.mn{font-size:14px}.mc{padding:14px}}\nnav .ngrp{align-self:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:0 4px 0 10px;white-space:nowrap}nav .ngrp:first-child{padding-left:0}\n.glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:8px 0 12px}\n.glance div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}.glance b{display:block;font-size:24px;color:var(--navy)}\n.glance span{font-size:12px;color:var(--muted);font-weight:600}\n.rcgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:18px;margin-top:16px;align-items:start}.rcgrid > *{min-width:0}\n.rc{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px 20px;display:flex;flex-direction:column;gap:10px}\n.rc-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.rc-when{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}\n.rc-v{font-size:12px;font-weight:800;border-radius:999px;padding:3px 10px;white-space:nowrap}.rc-v.ok{background:#eef1f6;color:var(--muted)}\n.rc-v.surprise{background:var(--amber-soft);color:var(--amber)}.rc-v.upset{background:var(--red-soft);color:var(--red)}\n.rc-score{display:grid;grid-template-columns:auto 1fr auto 1fr auto;align-items:center;gap:10px}\n.rc-score b{font-size:16px}.rc-score b:nth-of-type(2){text-align:right}.rc-n{font-size:30px;font-weight:800;color:var(--navy);padding:0 6px}\n.rc-head{margin:0;font-weight:600;color:var(--navy)}\n.rc-exp{background:#f7f9fc;border-radius:10px;padding:8px 12px;font-size:14px}.rc-exp small{display:block;color:var(--muted);font-size:11px}\n.rc-k{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-right:6px}\n.rc-goals{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px;font-weight:600}.rc-goals > div:last-child{text-align:right}\n.rc-goals small{display:block;color:var(--muted);font-weight:500;font-size:12px}\n.rc h5{margin:6px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}\n.rc-who{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}\n.rc-who li{display:flex;align-items:center;gap:8px}.rc-who.up li span b{color:var(--green)}.rc-who.down li span b{color:var(--red)}\n.rc-notes{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:4px}\n.rc-notes li.up::marker{color:var(--green)}.rc-notes li.down::marker{color:var(--red)}\n.rc-notes li.av{list-style:none;margin-left:-18px;display:flex;gap:8px}.avi{width:18px;flex:none;text-align:center}\n.rc-mine{display:flex;flex-wrap:wrap;gap:6px}.rc-mine small{color:var(--muted);margin-left:2px}\n.rc-link{align-self:flex-start;color:var(--blue);font-weight:700;font-size:13px;text-decoration:none;margin-top:4px}\n@media (max-width:600px){.rcgrid{grid-template-columns:1fr}.rc{padding:14px}.rc-score b{font-size:14px}.rc-n{font-size:24px}}\n.mwdl{display:flex;flex-direction:column;gap:4px}.mwdl .pbar{height:22px}\n.mwdl-l{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-weight:600}\n.mwdl-s{font-size:12px;color:var(--muted)}.mwdl-s b{color:var(--navy)}.mwdl-s i{font-style:normal;color:var(--muted)}\n.mpos{white-space:nowrap;font-size:12px;font-weight:800;color:var(--navy);background:#eef1f6;border-radius:999px;padding:2px 9px}.mpos.top{background:var(--green-soft);color:var(--green)}.mpos.bot{background:var(--red-soft);color:var(--red)}\n@media (max-width:600px){.mpos{font-size:10px;padding:2px 6px}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1533,7 +1593,7 @@ def outcome_of(h, a):
 
 
 def pick_from_lambdas(lh, la):
-    """Most likely result, then the most likely scoreline consistent with it."""
+    """Most likely result (home win, draw or away win), then the most likely scoreline within it."""
     grid = score_grid(lh, la)
     probs = {"H": 0.0, "D": 0.0, "A": 0.0}
     for (i, j), v in grid.items():
@@ -1544,18 +1604,52 @@ def pick_from_lambdas(lh, la):
     (h, a), _ = max(((k, v) for k, v in grid.items() if outcome_of(*k) == res), key=lambda kv: kv[1])
     return dict(h=h, a=a, res=res, pH=round(probs["H"], 3), pD=round(probs["D"], 3), pA=round(probs["A"], 3),
                 lh=round(lh, 3), la=round(la, 3),
+                pO=round(sum(v for (i, j), v in grid.items() if i + j > 2.5), 3),
+                top=[[i, j, round(v, 3)] for (i, j), v in sorted(grid.items(), key=lambda kv: -kv[1])[:3]],
                 cs_h=round(sum(v for (i, j), v in grid.items() if j == 0), 3),
                 cs_a=round(sum(v for (i, j), v in grid.items() if i == 0), 3))
 
 
-def fit_lambdas(pH, pD, pA):
-    """Expected goals for each side that best reproduce the market's win/draw/win odds."""
+_FIT_VALUES = [round(0.10 + 0.05 * i, 2) for i in range(75)]  # 0.10 to 3.80 expected goals
+_FIT_POIS = {lam: [pois(k, lam) for k in range(8)] for lam in _FIT_VALUES}
+
+
+def _grid_summary(lh, la):
+    ph, pa = _FIT_POIS[lh], _FIT_POIS[la]
+    H = D = A = O = 0.0
+    for i in range(8):
+        for j in range(8):
+            v = ph[i] * pa[j]
+            if i == 0 and j == 0:
+                v *= 1 - lh * la * DC_RHO
+            elif i == 0 and j == 1:
+                v *= 1 + lh * DC_RHO
+            elif i == 1 and j == 0:
+                v *= 1 + la * DC_RHO
+            elif i == 1 and j == 1:
+                v *= 1 - DC_RHO
+            if i > j:
+                H += v
+            elif i == j:
+                D += v
+            else:
+                A += v
+            if i + j > 2.5:
+                O += v
+    t = H + D + A
+    return H / t, D / t, A / t, O / t
+
+
+def fit_lambdas(pH, pD, pA, pO=None):
+    """Expected goals for each side that best reproduce the bookmakers' prices: the win/draw/loss
+    odds and, when available, the over/under 2.5 goals odds (which fix how many goals to expect)."""
     best, err = (1.3, 1.1), 1e9
-    for i in range(10, 380, 5):
-        for j in range(10, 380, 5):
-            lh, la = i / 100, j / 100
-            r = pick_from_lambdas(lh, la)
-            e = (r["pH"] - pH) ** 2 + (r["pD"] - pD) ** 2 + (r["pA"] - pA) ** 2
+    for lh in _FIT_VALUES:
+        for la in _FIT_VALUES:
+            h, dr, a, o = _grid_summary(lh, la)
+            e = (h - pH) ** 2 + (dr - pD) ** 2 + (a - pA) ** 2
+            if pO is not None:
+                e += (o - pO) ** 2
             if e < err:
                 best, err = (lh, la), e
     return best
@@ -1573,8 +1667,8 @@ def fetch_odds():
     if not ODDS_KEY:
         return []
     try:
-        r = SESSION.get(ODDS_URL, params=dict(apiKey=ODDS_KEY, regions="uk", markets="h2h", oddsFormat="decimal"),
-                        timeout=30)
+        r = SESSION.get(ODDS_URL, params=dict(apiKey=ODDS_KEY, regions="uk", markets="h2h,totals",
+                                              oddsFormat="decimal"), timeout=30)
         r.raise_for_status()
         events = r.json()
     except (requests.RequestException, ValueError) as err:
@@ -1582,23 +1676,28 @@ def fetch_odds():
         return []
     out = []
     for ev in events:
-        books = []
+        books, overs = [], []
         for bk in ev.get("bookmakers", []):
             for m in bk.get("markets", []):
-                if m.get("key") != "h2h":
-                    continue
-                pr = {o["name"]: 1 / o["price"] for o in m.get("outcomes", []) if o.get("price")}
-                h, a = pr.get(ev["home_team"]), pr.get(ev["away_team"])
-                dr = pr.get("Draw")
-                if h and a and dr:
-                    s = h + a + dr
-                    books.append((h / s, dr / s, a / s))
+                outcomes = [o for o in m.get("outcomes", []) if o.get("price")]
+                if m.get("key") == "h2h":
+                    pr = {o["name"]: 1 / o["price"] for o in outcomes}
+                    h, a = pr.get(ev["home_team"]), pr.get(ev["away_team"])
+                    dr = pr.get("Draw")
+                    if h and a and dr:
+                        s = h + a + dr
+                        books.append((h / s, dr / s, a / s))
+                elif m.get("key") == "totals":
+                    pr = {o["name"]: 1 / o["price"] for o in outcomes if abs(num(o.get("point")) - 2.5) < 0.01}
+                    if pr.get("Over") and pr.get("Under"):
+                        overs.append(pr["Over"] / (pr["Over"] + pr["Under"]))
         if books:
             n = len(books)
             out.append(dict(home=norm_team(ev["home_team"]), away=norm_team(ev["away_team"]),
                             t=ev.get("commence_time"), n=n,
                             pH=sum(b[0] for b in books) / n, pD=sum(b[1] for b in books) / n,
-                            pA=sum(b[2] for b in books) / n))
+                            pA=sum(b[2] for b in books) / n,
+                            pO=sum(overs) / len(overs) if overs else None))
     return out
 
 
@@ -1678,9 +1777,10 @@ def update_predictions(d, teams, players):
         o = match_odds(odds, g["h"], g["a"], f.get("kickoff_time"))
         market = None
         if o:
-            mlh, mla = fit_lambdas(o["pH"], o["pD"], o["pA"])
+            mlh, mla = fit_lambdas(o["pH"], o["pD"], o["pA"], o.get("pO"))
             market = pick_from_lambdas(mlh, mla)
-            market.update(books=o["n"], oH=round(o["pH"], 3), oD=round(o["pD"], 3), oA=round(o["pA"], 3))
+            market.update(books=o["n"], oH=round(o["pH"], 3), oD=round(o["pD"], 3), oA=round(o["pA"], 3),
+                          oO=round(o["pO"], 3) if o.get("pO") is not None else None)
         main = market or model
         sh, top_h = likely_scorers(g["h"]["id"], main["lh"], main["h"], players)
         sa, top_a = likely_scorers(g["a"]["id"], main["la"], main["a"], players)
@@ -2731,7 +2831,7 @@ def render(d, players, teams, log=None):
 
 {squad_review_section(squad, players, teams, d)}
 
-{teams_section(d, teams, players)}
+{teams_section(d, teams, players, log)}
 
 {compare_section(d, players, teams)}
 
