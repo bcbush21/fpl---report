@@ -84,6 +84,12 @@ def load_data():
 
     # Per-match history for the players we care about: my squad plus every
     # DEF/MID with real minutes (needed for defensive contribution hit rates).
+    # live ownership is the source of truth, so waiver pickups show up before the next deadline
+    owned = [s["element"] for s in d["status"] if s.get("owner") == ENTRY_ID]
+    if owned:
+        kept = [p["element"] for p in sorted(d["picks"], key=lambda x: x["position"]) if p["element"] in owned]
+        order = kept + [e for e in owned if e not in kept]
+        d["picks"] = [{"element": e, "position": i + 1} for i, e in enumerate(order)]
     mine = {p["element"] for p in d["picks"]}
     wanted = [e["id"] for e in boot["elements"]
               if e["id"] in mine or (e["element_type"] in (2, 3) and e.get("minutes", 0) >= 180)]
@@ -251,6 +257,7 @@ def build_players(d, teams):
     my_name = d["entry"]["name"]
     mine = {p["element"] for p in d["picks"]}
 
+    fx_by_id = {f["id"]: f for f in d["fixtures"]}
     players = {}
     for el in d["boot"]["elements"]:
         pos = POS[el["element_type"]]
@@ -301,6 +308,19 @@ def build_players(d, teams):
             p["dc_hit"] = max(0.0, min(1.0, (p["dc90"] - 0.6 * thr) / (0.8 * thr))) if thr and p["dc90"] else 0.0
             p["dc_source"] = "estimate"
         p["apps"] = len(apps)
+        # game-by-game log for the squad review
+        log = []
+        for h in hist or []:
+            fx = fx_by_id.get(h.get("fixture"))
+            if not fx or not fx.get("finished"):
+                continue
+            home = fx["team_h"] == el["team"]
+            log.append(dict(gw=fx.get("event"), mins=h.get("minutes", 0), pts=h.get("total_points", 0),
+                            g=h.get("goals_scored", 0), a=h.get("assists", 0), cs=h.get("clean_sheets", 0),
+                            bonus=h.get("bonus", 0), dc=h.get("defensive_contribution", 0),
+                            opp=h.get("opponent_team") or (fx["team_a"] if home else fx["team_h"]), home=home,
+                            kickoff=fx.get("kickoff_time") or ""))
+        p["log"] = sorted(log, key=lambda x: (x["gw"] or 0, x["kickoff"]))
         players[el["id"]] = p
     return players
 
@@ -765,6 +785,240 @@ On average you score {abs(vs_avg):.1f} pts per week {'more' if vs_avg >= 0 else 
 {league_lines(d)}</section>"""
 
 
+# ---------------------------------------------------------------- squad review
+
+VERDICTS = {  # label, css color, sort order
+    "start": ("Start him", "g", 0), "form": ("Coming into form", "g", 1), "core": ("Keep: core", "b", 2),
+    "keep": ("Keep", "b", 3), "monitor": ("Monitor", "a", 4), "hold": ("Injured: hold", "a", 5),
+    "bench": ("Bench for now", "a", 6), "replace": ("Replace", "r", 7), "drop": ("Drop", "r", 8),
+}
+
+
+def team_ranks(teams):
+    played = [t for t in teams.values() if t["gp"]]
+    by_def = sorted(played, key=lambda t: t["def_rating"])            # 1 = tightest defense
+    by_att = sorted(played, key=lambda t: t["att_rating"], reverse=True)  # 1 = best attack
+    return ({t["id"]: i for i, t in enumerate(by_def, 1)}, {t["id"]: i for i, t in enumerate(by_att, 1)})
+
+
+def review(p, teams, players, ranks):
+    t = teams[p["tid"]]
+    def_rank, att_rank = ranks
+    games = p["log"]
+    n = len(games) or max(t["gp"], 1)
+    mins = [g["mins"] for g in games]
+    played = [g for g in games if g["mins"] > 0]
+    total_pts = sum(g["pts"] for g in games) if games else p["total"]
+    total_mins = sum(mins) if games else p["mins"]
+    full = sum(1 for m in mins if m >= 60)
+    ppa = total_pts / len(played) if played else 0.0
+    p90 = total_pts / total_mins * 90 if total_mins >= 90 else None
+    mins_share = total_mins / (n * 90) if n else 0
+    recent = games[-3:]
+    recent_played = [g for g in recent if g["mins"] > 0]
+    recent_ppa = sum(g["pts"] for g in recent_played) / len(recent_played) if recent_played else 0.0
+    recent_share = sum(g["mins"] for g in recent) / (len(recent) * 90) if recent else 0
+
+    # leading run of games with no minutes, then he came back
+    missed = 0
+    for g in games:
+        if g["mins"] == 0:
+            missed += 1
+        else:
+            break
+    returned = missed >= 2 and len(played) >= 1
+    lost_spot = len(games) >= 4 and all(g["mins"] == 0 for g in games[-2:]) and any(g["mins"] >= 60 for g in games[:-2])
+
+    notes = []
+    status_bad = p["status"] in ("i", "s", "u", "n") or (p["chance"] is not None and p["chance"] <= 25)
+    news = p["news"] or ""
+    if p["status"] != "a" or (p["chance"] is not None and p["chance"] < 100):
+        notes.append(f"Current news: {news or STATUS.get(p['status'], '')}"
+                     + ("" if "chance" in news or p["chance"] is None else f" ({p['chance']}% chance of playing)") + ".")
+
+    if returned:
+        back = played[0]
+        notes.append(f"Missed the first {missed} game{'s' if missed > 1 else ''} and is back since GW{back['gw']}. "
+                     "Judge him on what he's done since returning, not his season minutes total.")
+        if p90 and len(played) <= 2 and total_mins < 120:
+            notes.append(f"{total_pts} pts in just {total_mins} minutes ({p90:.1f} per 90). A tiny sample, "
+                         "but it shows what he does when he's on the pitch. Minutes should rise as he regains fitness.")
+    elif lost_spot:
+        notes.append("Played regularly early on but has had no minutes in the last 2 games. Check whether he's injured "
+                     "or has lost his place before relying on him.")
+    elif played and full < len(played) * 0.6 and len(played) >= 3:
+        notes.append(f"Often subbed on or off: 60+ minutes in only {full} of {len(played)} appearances, which caps "
+                     "his appearance and clean sheet points.")
+    elif len(played) >= 3 and full == len(played) and p["pos"] in ("DEF", "GK"):
+        notes.append(f"Has played 60+ minutes in all {full} appearances. Nailed on, so every week he's a "
+                     "clean sheet and defensive contribution chance.")
+
+    # returns against good opposition are worth more than returns against bad
+    for g in played:
+        if g["g"] + g["a"] == 0:
+            continue
+        opp = teams.get(g["opp"])
+        if opp and def_rank.get(opp["id"], 99) <= 6:
+            what = " and ".join(x for x in (f"{g['g']} goal{'s' if g['g'] > 1 else ''}" if g["g"] else "",
+                                             f"{g['a']} assist{'s' if g['a'] > 1 else ''}" if g["a"] else "") if x)
+            notes.append(f"Got {what} against {opp['full']} in GW{g['gw']}, one of the league's best defenses "
+                         f"(#{def_rank[opp['id']]}). That's a strong signal, not a soft return.")
+            break
+
+    if len(played) >= 3:
+        best = max(played, key=lambda g: g["pts"])
+        if total_pts > 0 and best["pts"] / total_pts >= 0.5 and best["pts"] >= 10:
+            notes.append(f"{best['pts']} of his {total_pts} points came in one game (GW{best['gw']}). "
+                         "Outside that he's averaged "
+                         f"{(total_pts - best['pts']) / (len(played) - 1):.1f} a game, so treat the total with caution.")
+        elif min(g["pts"] for g in played) >= 2 and ppa >= 4:
+            notes.append(f"Consistent: at least 2 points in every appearance, averaging {ppa:.1f}.")
+
+    if len(played) >= 4:
+        diff = recent_ppa - ppa
+        if diff >= 1.5:
+            notes.append(f"Trending up: {recent_ppa:.1f} pts a game over his last {len(recent_played)} vs {ppa:.1f} on the season.")
+        elif diff <= -2 and recent_played:
+            notes.append(f"Cooling off: {recent_ppa:.1f} pts a game over his last {len(recent_played)} vs {ppa:.1f} on the season.")
+
+    if p["pos"] in ("MID", "FWD") and p["xgi"] >= 1 and total_mins >= 270:
+        v = finishing_verdict(p)
+        if v.startswith("Due"):
+            notes.append(f"Underlying numbers are better than his returns: {p['g'] + p['a']} G+A from {p['xgi']:.1f} xGI.")
+        elif v.startswith("Running hot"):
+            notes.append(f"Returns are ahead of his chances: {p['g'] + p['a']} G+A from {p['xgi']:.1f} xGI. Expect some cooling.")
+    if p["pos"] in ("DEF", "MID") and p["dc_hit"] >= 0.5 and len(played) >= 2:
+        notes.append(f"Hits the defensive contribution bonus in {p['dc_hit']:.0%} of games, a near-free 2 points.")
+
+    if t["run"]:
+        nx = t["run"][0]
+        opp = teams[nx["opp_id"]]
+        lab = ease_label(t["def_ease" if p["pos"] in ("GK", "DEF") else "att_ease"])
+        side = "attack" if p["pos"] in ("GK", "DEF") else "defense"
+        orank = att_rank.get(opp["id"]) if p["pos"] in ("GK", "DEF") else def_rank.get(opp["id"])
+        qual = ""
+        if orank:
+            if (p["pos"] in ("GK", "DEF") and orank >= 15) or (p["pos"] not in ("GK", "DEF") and orank >= 15):
+                qual = f", whose {side} ranks #{orank} of 20, a good matchup"
+            elif orank <= 5:
+                qual = f", whose {side} ranks #{orank} of 20, a tough one"
+        notes.append(f"Next: {opp['full']} ({'home' if nx['home'] else 'away'}){qual}. Next {HORIZON} overall: {lab.lower()}.")
+
+    # ---- verdict
+    alt = None
+    free = [q for q in players.values() if q["pos"] == p["pos"] and not q["owner"] and q["mins"] >= 270
+            and q["start_rate"] >= 0.5 and q["proj_run"] > 0]
+    if free:
+        alt = max(free, key=lambda q: q["proj_run"])
+    long_out = any(k in news.lower() for k in ("unknown return", "joined", "loan", "left the club", "departed"))
+    hot_return = returned and recent_played and (recent_ppa >= 6 or (p90 or 0) >= 8)
+
+    if status_bad:
+        if long_out and not p["core"]:
+            v, why = "drop", "Out with no return date and not one of your core players. The roster spot is worth more."
+        elif p["core"]:
+            v, why = "hold", "Injured, but he's one of your best players. Bench him and wait."
+        else:
+            v, why = "bench", "Not fit to play this week. Keep him if the injury is short, otherwise look at a replacement."
+    elif hot_return:
+        v, why = "start", (f"Back from his absence and producing straight away ({recent_ppa:.0f} pts a game since returning). "
+                           "Low season minutes are misleading here.")
+    elif lost_spot and p["core"]:
+        v, why = "monitor", ("One of your better players, but he hasn't played in 2 games. Check the news "
+                             "before starting him; don't drop him on this alone.")
+    elif p["core"]:
+        if p.get("elite"):
+            why = f"One of the best at his position ({rank_str(p)}). Keep starting him."
+        else:
+            why = f"One of your top scorers this season ({total_pts} pts). Keep starting him."
+        v = "core"
+    elif lost_spot or (len(games) >= 3 and recent_share < 0.35 and mins_share < 0.5 and not returned):
+        if alt and alt["proj_run"] > p["proj_run"] + 2:
+            v, why = "replace", f"Not getting minutes. {alt['name']} ({alt['team']}) is a free agent who plays."
+        else:
+            v, why = "monitor", "Minutes have dried up. Watch team news before starting him."
+    elif len(played) >= 4 and recent_ppa - ppa >= 1.5:
+        v, why = "form", f"Scoring {recent_ppa:.1f} a game lately, up from {ppa:.1f}. Ride the form."
+    elif len(played) >= 4 and recent_ppa - ppa <= -2 and recent_share < mins_share:
+        v, why = "monitor", "Points and minutes both trending down. Not a drop yet, but watch him."
+    elif alt and ppa < 3 and len(played) >= 3 and alt["proj_run"] > p["proj_run"] + 2.5:
+        v, why = "replace", (f"Averaging {ppa:.1f} pts a game. {alt['name']} ({alt['team']}) projects "
+                             f"{alt['proj_run']} vs his {p['proj_run']} over the next {HORIZON}.")
+    else:
+        v, why = "keep", (f"Averaging {ppa:.1f} pts a game, with 60+ minutes in {full} of {n} games. "
+                          "Doing his job, no reason to change.")
+
+    return dict(v=v, why=why, notes=notes, total=total_pts, ppa=ppa, p90=p90, total_mins=total_mins,
+                n=n, full=full, apps=len(played), mins_share=mins_share, alt=alt if v == "replace" else None)
+
+
+def gw_bars(p, teams):
+    games = p["log"]
+    if not games:
+        return '<p class="empty">No match history yet.</p>'
+    top = max(12, max(g["pts"] for g in games))
+    cols = []
+    for g in games:
+        h = max(4, g["pts"] / top * 64) if g["pts"] > 0 else 3
+        cls = "dnp" if g["mins"] == 0 else "full" if g["mins"] >= 60 else "part"
+        opp = teams.get(g["opp"])
+        what = []
+        if g["g"]:
+            what.append(f"{g['g']}G")
+        if g["a"]:
+            what.append(f"{g['a']}A")
+        if g["cs"] and p["pos"] in ("GK", "DEF"):
+            what.append("CS")
+        tip = (f"GW{g['gw']} vs {opp['full'] if opp else '?'} ({'H' if g['home'] else 'A'}): "
+               f"{g['pts']} pts, {g['mins']} min" + (f", {' '.join(what)}" if what else ""))
+        label = "–" if g["mins"] == 0 else g["pts"]
+        cols.append(f'<div class="gb" title="{esc(tip)}"><span class="gv">{label}</span>'
+                    f'<div class="gbar {cls}" style="height:{h:.0f}px"></div>'
+                    f'{badge(g["opp"], 16)}<small>GW{g["gw"]}</small></div>')
+    return f'<div class="gbs">{"".join(cols)}</div>'
+
+
+def squad_review_section(squad, players, teams):
+    ranks = team_ranks(teams)
+    items = [(p, review(p, teams, players, ranks)) for p in squad]
+    items.sort(key=lambda x: (VERDICTS[x[1]["v"]][2], -x[1]["total"]))
+    counts = {}
+    for _, r in items:
+        counts[r["v"]] = counts.get(r["v"], 0) + 1
+    summary = " ".join(f'<span class="vp {VERDICTS[k][1]}">{VERDICTS[k][0]} · {c}</span>'
+                       for k, c in sorted(counts.items(), key=lambda kv: VERDICTS[kv[0]][2]))
+    cards = []
+    for p, r in items:
+        label, color, _ = VERDICTS[r["v"]]
+        alt = ""
+        if r["alt"]:
+            a = r["alt"]
+            alt = (f'<div class="alt">{photo(a, 36)}<div><b>Option: {esc(a["name"])}</b>'
+                   f'<div class="tm">{badge(a["tid"], 14)}{esc(a["team"])} · free agent · projects {a["proj_run"]} '
+                   f'over next {HORIZON}</div></div></div>')
+        p90 = f'{r["p90"]:.1f}' if r["p90"] is not None else "-"
+        notes = "".join(f"<li>{esc(x)}</li>" for x in r["notes"])
+        cards.append(f'''<div class="rv">
+<div class="rv-top">{photo(p, 60)}<div class="pc-id"><div class="pc-name">{esc(p["name"])}</div>
+<div class="tm">{badge(p["tid"], 16)}{esc(teams[p["tid"]]["full"])} · {p["pos"]}{" · " + rank_str(p) if p.get("pos_rank") else ""}</div></div>
+<span class="vp {color}">{label}</span></div>
+<p class="rv-why">{esc(r["why"])}</p>
+<div class="rv-stats">
+<div><span class="k">Points</span><span class="v">{r["total"]}</span></div>
+<div><span class="k">Per game</span><span class="v">{r["ppa"]:.1f}</span></div>
+<div><span class="k">Per 90</span><span class="v">{p90}</span>{'<span class="k2">needs 90+ min</span>' if r["p90"] is None else ''}</div>
+<div><span class="k">Minutes</span><span class="v">{r["total_mins"]}</span><span class="k2">{r["mins_share"]:.0%} of possible</span></div>
+<div><span class="k">60+ min</span><span class="v">{r["full"]}/{r["n"]}</span></div></div>
+<div class="rv-lbl">Points by gameweek <span class="lg2"><i class="full"></i>60+ min <i class="part"></i>under 60 <i class="dnp"></i>didn't play</span></div>
+{gw_bars(p, teams)}
+{f'<ul class="rv-notes">{notes}</ul>' if notes else ''}{alt}</div>''')
+    return f"""<section id="review"><h2>Squad review</h2>
+<p class="note">Every player on your team: what he's actually delivered, how reliable his minutes are, which way his
+form is heading, and the context behind the numbers. Sorted from strongest to weakest call. Hover a bar for the match details.</p>
+<div class="vsum">{summary}</div>
+<div class="rvgrid">{''.join(cards)}</div></section>"""
+
+
 # ---------------------------------------------------------------- advice
 
 def tip(kind, title, body, *people):
@@ -1158,7 +1412,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -1192,7 +1446,7 @@ def render(d, players, teams):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{proj_xi:.0f}</b><span>Projected next GW (XI)</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#fixtures">Fixtures</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#advice">Advice</a><a href="#squad">My squad</a><a href="#review">Squad review</a><a href="#fixtures">Fixtures</a>
 <a href="#finishing">xG vs actual</a><a href="#defense">Defensive contribution</a>
 <a href="#market">Free agents</a><a href="#trades">Trade targets</a></div></nav>
 <main>
@@ -1210,6 +1464,8 @@ def render(d, players, teams):
 <p class="note">The big blue number is projected points next gameweek: chance of starting, xG and xA against this
 opponent, clean sheet odds, defensive contribution, saves and bonus.</p>
 {squad_cards(squad, teams)}</section>
+
+{squad_review_section(squad, players, teams)}
 
 <section id="fixtures"><h2>Fixture outlook, {gw_range}</h2>
 <p class="note">Who has the easy and hard runs coming up, and why, adjusted for home and away.</p>
