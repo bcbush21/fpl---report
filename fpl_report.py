@@ -1241,7 +1241,9 @@ def squad_review_section(squad, players, teams, d=None):
         cards.append(f'''<div class="rv">
 <div class="rv-top">{photo(p, 60)}<div class="pc-id"><div class="pc-name">{esc(p["name"])}</div>
 <div class="tm">{badge(p["tid"], 16)}{esc(teams[p["tid"]]["full"])} · {p["pos"]}{" · " + rank_str(p) if p.get("pos_rank") else ""}</div>
-<div class="pc-slot">{"Starting XI" if p.get("slot") == "XI" else "Bench"}</div></div>
+<div class="pc-slot">{"Starting XI" if p.get("slot") == "XI" else "Bench"}</div>
+<div class="rv-acts"><button class="cmp-add" data-id="{p["id"]}">+ Compare</button>
+<button class="cmp-add cmp-repl-btn" data-id="{p["id"]}">Find replacements</button></div></div>
 <span class="vp {color}">{label}</span></div>
 <p class="rv-why">{esc(r["why"])}</p>
 <div class="rv-stats">
@@ -1291,7 +1293,8 @@ def photo(p, size=44):
 
 def who(p):
     star = '<span class="star" title="Your player">★</span>' if p["mine"] else ""
-    return (f'<div class="who">{photo(p)}<div><div class="nm">{esc(p["name"])}{star}</div>'
+    return (f'<div class="who">{photo(p)}<div><div class="nm">{esc(p["name"])}{star}'
+            f'<button class="cmp-add" data-id="{p["id"]}">+ Compare</button></div>'
             f'<div class="tm">{badge(p["tid"], 16)}{esc(p["team"])} · {p["pos"]}</div></div></div>')
 
 
@@ -1466,7 +1469,7 @@ border-radius:16px;padding:18px 22px}
 .flag.ok{background:var(--blue-soft);color:var(--blue)}.flag.good{background:var(--green-soft);color:var(--green)}
 .inj{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.inj:last-child{border:0}
 .empty{color:var(--muted);font-style:italic}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\n.dchips{display:flex;gap:5px}.dcol{display:flex;flex-direction:column;align-items:center;gap:2px}\n.dcol small{font-size:10px;color:var(--muted)}\n.dchip{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;border-radius:7px;font-weight:800;font-size:13px;background:#eef1f6;color:var(--ink);cursor:default}\n.dchip.up{background:var(--green-soft);color:var(--green)}.dchip.down{background:var(--red-soft);color:var(--red)}\n.dchip.dnp{color:var(--muted);background:#f5f6f8}\n.bxt td{text-align:center;padding:10px 8px}.bxt td:first-child{text-align:left}\n.bx{border-radius:10px;background:#f3f5f9;border:3px solid #fff}\n.bx.up{background:#d8f2e0;color:var(--green)}.bx.down{background:#fbdcdc;color:var(--red)}\n.bx-word{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}\n.bx-gap{display:block;font-size:20px;font-weight:800;line-height:1.2}\n.bx-sub{display:block;font-size:11px;color:var(--muted);font-weight:600}\n.bxt tr.sum td{border-top:2px solid var(--line)}\n.rec{border-radius:10px;border:3px solid #fff}.rec.good{background:var(--green);color:#fff}\n.rec.bad{background:var(--red);color:#fff}.rec.even{background:#94a3b8;color:#fff}\n.rec-n{display:block;font-size:20px;font-weight:800}.rec-v{display:block;font-size:12px;font-weight:700;opacity:.9}\n@media (max-width:600px){.bxt{font-size:12px;table-layout:fixed}.bxt td,.bxt th{white-space:normal}.bxt td,.bxt th{padding:5px 2px}.bxt td:first-child{width:52px;font-size:12px}.bx-gap{font-size:15px}.bx-word{font-size:9px}.bx-sub{font-size:9px}.rec-n{font-size:15px}.rec-v{font-size:10px}.bx,.rec{border-width:2px}}\n.gbar.fut,.lg2 i.fut{background:repeating-linear-gradient(135deg,#d97706 0 4px,#f5b257 4px 8px)}\n.gb.pred .gv{color:#b45309}.gb.pred small{color:#b45309;font-weight:700}\n.gsep{width:2px;align-self:stretch;background:repeating-linear-gradient(180deg,#cbd5e1 0 4px,transparent 4px 8px);margin:0 4px}\n.gbadges{display:flex;gap:2px;min-height:16px;align-items:center}\n.mday{margin:26px 0 12px;font-size:15px;color:var(--navy);text-transform:none;letter-spacing:0;border-bottom:2px solid var(--line);padding-bottom:6px}\n.rts{display:flex;gap:6px;flex-wrap:wrap}\n.rt{flex:1;min-width:58px;max-width:90px;text-align:center;border-radius:10px;padding:6px 4px;background:#eef1f6;cursor:default}\n.rt b{display:block;font-size:18px;color:var(--ink)}.rt span{display:block;font-size:11px;font-weight:700;color:var(--muted)}\n.rt small{display:flex;align-items:center;justify-content:center;gap:3px;font-size:10px;color:var(--muted)}\n.rt.hi{background:var(--green-soft)}.rt.hi b,.rt.hi span{color:var(--green)}\n.rt.lo{background:var(--red-soft)}.rt.lo b,.rt.lo span{color:var(--red)}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}.two .card{margin:0}\n.ch-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}\n.kpi{text-align:right;flex:none}.kpi b{display:block;font-size:34px;line-height:1;color:var(--navy)}.kpi span{font-size:14px;font-weight:700}\n.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin:4px 0 2px}.legend span{display:flex;align-items:center;gap:6px}\n.sw{display:inline-block;width:18px;height:3px;border-radius:2px}.sw.dash{background:repeating-linear-gradient(90deg,#d97706 0 6px,transparent 6px 10px)}\n.chart{width:100%;height:auto;display:block;margin-top:6px}.chart .grid{stroke:#e8edf5;stroke-width:1}\n.chart text{font-size:12px;fill:#5b6b82}.chart .ytick{text-anchor:end}.chart .xtick{text-anchor:middle}\n.chart .pt:hover circle:last-child{r:7}\n.placestrip{display:flex;gap:6px;margin-top:14px}.ps{flex:1;min-width:0;text-align:center;background:#f3f6fb;border-radius:10px;padding:8px 4px}\n.ps small{display:block;font-size:11px;color:var(--muted)}.ps b{font-size:16px}.ps.now{background:var(--blue);color:#fff}.ps.now small{color:#dbe6ff}\n@media (max-width:600px){.two{grid-template-columns:1fr}.kpi b{font-size:28px}.chart text{font-size:22px}.ps b{font-size:14px}.ps small{font-size:10px}}\n.chart.big{margin-top:14px}.chart .axt{font-weight:600}\n.chart .endlab text{font-size:13px;font-weight:600}.chart .endlab.me text{font-weight:800}.chartwrap{overflow-x:auto}\n.chart .series,.chart .endlab{transition:opacity .15s}.chart .dim{opacity:.12}\n.lg-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}\n.lg-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer}\n.lg-btn:hover{background:var(--blue-soft)}.lg-btn.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}\n.lg-btn .sw,.lgn .sw{width:12px;height:12px;border-radius:50%}.lgn{display:inline-flex;align-items:center;gap:8px;font-weight:600}\n.lgt td,.lgt th{text-align:center;padding:10px 12px}.lgt td:first-child,.lgt th:first-child{text-align:left}\n.lgt td.wk{font-weight:800;color:var(--navy)}\n@media (max-width:600px){.chart.big{min-width:760px}.chart.big text{font-size:13px}}\n.sortbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 14px}\n.sb{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font:600 13px/1 inherit;color:var(--blue);cursor:pointer}\n.sb.on{background:var(--blue);color:#fff;border-color:var(--blue)}\n.tt td.rk{font-weight:800;color:var(--muted);width:36px}\n.fms{display:flex;gap:4px}.fm{display:inline-flex;width:24px;height:24px;border-radius:6px;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}.fm.W{background:var(--green)}.fm.D{background:#94a3b8}.fm.L{background:var(--red)}\n.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.mc{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;display:flex;flex-direction:column;gap:12px}\n.mc.hot{border-color:#bfd2ff;box-shadow:0 0 0 3px var(--blue-soft)}\n.mko{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}\n.mrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px}\n.ms{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.mn{font-weight:800;font-size:15px}\n.mscore{display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:120px}\n.mscore span{font-size:28px;font-weight:800;color:var(--navy)}.mscore i{font-style:normal;color:var(--muted)}\n.mscore small{width:100%;text-align:center;font-size:11px;color:var(--muted)}\n.mflag{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.5}\n.mflag.att{background:var(--green-soft)}.mflag.cs{background:var(--blue-soft)}\n.mft{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px;color:#fff;margin-top:2px}\n.mflag.att .mft{background:var(--green)}.mflag.cs .mft{background:var(--blue)}\n.mflag .badge{margin-top:2px}b.g{color:var(--green)}b.b{color:var(--blue)}\n.mmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:10px}\n.mp{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;background:#f3f6fb;border-radius:999px;padding:3px 10px 3px 3px}\n@media (max-width:600px){.mgrid{grid-template-columns:1fr}.mflag{flex-wrap:wrap}}\n.vsum{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}\n.vp{display:inline-block;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:800;white-space:nowrap}\n.vp.g{background:var(--green-soft);color:var(--green)}.vp.b{background:var(--blue-soft);color:var(--blue)}\n.vp.a{background:var(--amber-soft);color:var(--amber)}.vp.r{background:var(--red-soft);color:var(--red)}\n.rvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:18px}\n.rv{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}\n.rv-top{display:flex;gap:14px;align-items:center}.rv-top .vp{flex:none}\n.rv-why{margin:0;font-size:15px;font-weight:600;color:var(--navy)}\n.rv-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;background:#f7f9fc;border-radius:12px;padding:12px 8px}\n.rv-stats div{text-align:center}.k2{display:block;font-size:10px;color:var(--muted)}\n.rv-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}\n.lg2{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600}\n.lg2 i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:-6px}\n.lg2 i.full,.gbar.full{background:var(--blue2)}.lg2 i.part,.gbar.part{background:#9ec5f4}.lg2 i.dnp,.gbar.dnp{background:#d5dbe5}\n.gbs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}\n.gb{flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:default}\n.gbar{width:100%;max-width:30px;border-radius:5px 5px 2px 2px}.gv{font-size:13px;font-weight:800}\n.gb small{font-size:10px;color:var(--muted)}\n.rv-notes{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:#334155;font-size:14px;line-height:1.55}\n.alt{display:flex;gap:10px;align-items:center;background:var(--green-soft);border-radius:12px;padding:10px 12px}\n@media (max-width:600px){.rvgrid{grid-template-columns:1fr}.rv-stats{grid-template-columns:repeat(3,1fr)}}\n.links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}.links a{color:var(--blue);font-weight:600;font-size:13px;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px}\n.links a:hover{background:var(--blue-soft)}.cnt{display:inline-block;background:var(--blue-soft);color:var(--blue);font-size:13px;border-radius:999px;padding:1px 9px;vertical-align:middle}\n.chip{flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;cursor:help}\n.cgw{font-size:11px;color:var(--muted);font-weight:600}.cmain{display:flex;align-items:center;gap:6px}\n.cval{font-size:11px;color:var(--muted)}.cval small{font-size:14px;font-weight:800;color:var(--ink)}\n.chip.good .cval small{color:var(--green)}.chip.bad .cval small{color:var(--red)}\n.ckey{background:#f7f9fc;border-radius:12px;padding:12px 14px;font-size:14px;line-height:2;margin:0 0 8px}\n.ckey .chip{display:inline-flex;vertical-align:middle;padding:2px 8px;margin:0 2px;cursor:default}\n.rv-lbl .pill{text-transform:none;letter-spacing:0;font-size:12px}\n.wdl{font-weight:700;font-size:15px}.wdl i{font-style:normal;color:var(--muted);margin:0 3px}\n.gih{color:var(--amber);font-weight:700}\n.scrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:8px 0}\n.sc{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}.sc h4{margin:0 0 10px}\n.scg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.scg b{display:block;font-size:22px;color:var(--navy)}\n.scg span{font-size:12px;color:var(--muted)}\n.pbar{display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:11px;font-weight:700;color:#fff}\n.pbar span{display:flex;align-items:center;justify-content:center;min-width:28px}\n.pbar .pb-h{background:var(--blue2)}.pbar .pb-d{background:#94a3b8}.pbar .pb-a{background:#d97706}\n.pgw{background:#fff;border:1px solid var(--line);border-radius:16px;margin:14px 0;padding:6px 16px}\n.pgw summary{cursor:pointer;font-weight:800;color:var(--navy);padding:10px 0}\n.ok{color:var(--green);font-weight:800}.no{color:var(--red);font-weight:800}\n#predictions td{white-space:normal;vertical-align:top}#predictions .who{margin:2px 0}\n.dchips{display:flex;gap:5px}.dcol{display:flex;flex-direction:column;align-items:center;gap:2px}\n.dcol small{font-size:10px;color:var(--muted)}\n.dchip{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;border-radius:7px;font-weight:800;font-size:13px;background:#eef1f6;color:var(--ink);cursor:default}\n.dchip.up{background:var(--green-soft);color:var(--green)}.dchip.down{background:var(--red-soft);color:var(--red)}\n.dchip.dnp{color:var(--muted);background:#f5f6f8}\n.bxt td{text-align:center;padding:10px 8px}.bxt td:first-child{text-align:left}\n.bx{border-radius:10px;background:#f3f5f9;border:3px solid #fff}\n.bx.up{background:#d8f2e0;color:var(--green)}.bx.down{background:#fbdcdc;color:var(--red)}\n.bx-word{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}\n.bx-gap{display:block;font-size:20px;font-weight:800;line-height:1.2}\n.bx-sub{display:block;font-size:11px;color:var(--muted);font-weight:600}\n.bxt tr.sum td{border-top:2px solid var(--line)}\n.rec{border-radius:10px;border:3px solid #fff}.rec.good{background:var(--green);color:#fff}\n.rec.bad{background:var(--red);color:#fff}.rec.even{background:#94a3b8;color:#fff}\n.rec-n{display:block;font-size:20px;font-weight:800}.rec-v{display:block;font-size:12px;font-weight:700;opacity:.9}\n@media (max-width:600px){.bxt{font-size:12px;table-layout:fixed}.bxt td,.bxt th{white-space:normal}.bxt td,.bxt th{padding:5px 2px}.bxt td:first-child{width:52px;font-size:12px}.bx-gap{font-size:15px}.bx-word{font-size:9px}.bx-sub{font-size:9px}.rec-n{font-size:15px}.rec-v{font-size:10px}.bx,.rec{border-width:2px}}\n.gbar.fut,.lg2 i.fut{background:repeating-linear-gradient(135deg,#d97706 0 4px,#f5b257 4px 8px)}\n.gb.pred .gv{color:#b45309}.gb.pred small{color:#b45309;font-weight:700}\n.gsep{width:2px;align-self:stretch;background:repeating-linear-gradient(180deg,#cbd5e1 0 4px,transparent 4px 8px);margin:0 4px}\n.gbadges{display:flex;gap:2px;min-height:16px;align-items:center}\n.mday{margin:26px 0 12px;font-size:15px;color:var(--navy);text-transform:none;letter-spacing:0;border-bottom:2px solid var(--line);padding-bottom:6px}\n.rts{display:flex;gap:6px;flex-wrap:wrap}\n.rt{flex:1;min-width:58px;max-width:90px;text-align:center;border-radius:10px;padding:6px 4px;background:#eef1f6;cursor:default}\n.rt b{display:block;font-size:18px;color:var(--ink)}.rt span{display:block;font-size:11px;font-weight:700;color:var(--muted)}\n.rt small{display:flex;align-items:center;justify-content:center;gap:3px;font-size:10px;color:var(--muted)}\n.rt.hi{background:var(--green-soft)}.rt.hi b,.rt.hi span{color:var(--green)}\n.rt.lo{background:var(--red-soft)}.rt.lo b,.rt.lo span{color:var(--red)}\n.cmp-tools{display:flex;flex-direction:column;gap:12px}.cmp-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}\n.cmp-row label{font-weight:700;color:var(--navy)}\n.cmp-row input,.cmp-row select{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}\n.cmp-row input{flex:1;min-width:200px}\n.cmp-res{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}\n.cmp-r{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:8px 10px;cursor:pointer;font:inherit}.cmp-r:hover{border-color:var(--blue);background:var(--blue-soft)}\n.cmp-r > span:not(.ph){flex:1;min-width:0}.cmp-r b{display:block}.cmp-r small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}\n.cmp-r em{font-style:normal;font-weight:800;color:var(--blue);font-size:13px;white-space:nowrap}\n.cmp-bar{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;font-weight:700;color:var(--navy)}\n.cv{background:var(--navy);color:#fff;border-radius:16px;padding:16px 20px;margin:0 0 14px}\n.cv-k{display:inline-block;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-right:8px}.cv b{font-size:20px}.cv p{margin:8px 0 0;opacity:.92}\n.ct{table-layout:fixed}.ct th,.ct td{white-space:normal;vertical-align:top}\n.ct thead th{background:#fff;color:var(--ink);text-transform:none;letter-spacing:0;font-size:14px;border-bottom:2px solid var(--line)}\n.ct tbody th{text-align:left;color:var(--muted);font-size:12px;width:150px}.ct-l{width:150px}\n@media (max-width:600px){.ct tbody th,.ct-l{width:92px;font-size:11px}.ct td{font-size:14px}.ch{flex-direction:column;align-items:flex-start;gap:4px}.ch .ph{--s:40px!important}.ct th,.ct td{padding:8px 6px}.lgx{display:none}}\n.ct td{font-weight:800;font-size:16px}.ct td small{display:block;font-weight:600;font-size:11px;color:var(--muted)}\n.ct td.best{background:var(--green-soft);color:var(--green)}\n.ch{display:flex;gap:10px;align-items:center;position:relative}.ch b{display:block;font-size:15px}\n.ch small{display:flex;align-items:center;gap:4px;font-weight:600;color:var(--muted);font-size:12px}\n.cx{position:absolute;top:-6px;right:-4px;border:0;background:#eef1f6;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:16px;line-height:1}\n.cw{display:flex;align-items:flex-end;gap:3px;height:50px;margin-top:10px}.cw i{flex:1;max-width:14px;border-radius:3px 3px 1px 1px}\n.cw i.f,.lgx i.f{background:var(--blue2)}.cw i.p,.lgx i.p{background:#9ec5f4}.cw i.d,.lgx i.d{background:#d5dbe5}\n.cw i.x,.lgx i.x{background:repeating-linear-gradient(135deg,#d97706 0 3px,#f5b257 3px 6px)}\n.cs{width:1px;align-self:stretch;background:#cbd5e1;margin:0 2px}\n.lgx{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}\n.lgx i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:-3px}\n.ccs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.cc{font-size:11px;font-weight:700;background:#eef1f6;border-radius:6px;padding:2px 6px;color:var(--ink)}\n.cc small{display:inline;margin-left:2px;color:var(--muted)}.cc.good{background:var(--green-soft);color:var(--green)}.cc.bad{background:var(--red-soft);color:var(--red)}\n.cmp-add{border:1px solid var(--line);background:#fff;color:var(--blue);border-radius:999px;padding:2px 9px;font:700 11px/1.6 inherit;cursor:pointer;margin-left:8px;vertical-align:middle;white-space:nowrap}.cmp-add:hover{background:var(--blue-soft)}\n.rv-acts{display:flex;gap:6px;margin-top:6px}.rv-acts .cmp-add{margin-left:0}\n.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--navy);color:#fff;padding:10px 16px;border-radius:999px;font-weight:700;font-size:14px;opacity:0;pointer-events:none;transition:.2s;z-index:20}\n.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}\nfooter{color:var(--muted);font-size:13px;margin-top:60px;max-width:820px}
 @media (max-width:600px){header h1{font-size:26px}.card{padding:18px}.tip{flex-direction:column;align-items:flex-start}}
 """
 
@@ -2016,6 +2019,225 @@ he was on the pitch, which is the fairer read for anyone who's been injured. Sor
 </section>"""
 
 
+# ---------------------------------------------------------------- interactive player comparison
+
+def compare_data(d, players, teams):
+    """Everything the in-page comparison tool needs, for every player, as compact JSON."""
+    gws = sorted(d.get("live", {}))
+    live, live_min = d.get("live", {}), d.get("live_min", {})
+    _, _, _, pooled = league_benchmark(d, players)
+    rows = []
+    for p in players.values():
+        wk = [[gw, live.get(gw, {}).get(p["id"], 0), live_min.get(gw, {}).get(p["id"], 0)] for gw in gws]
+        if not any(m for _, _, m in wk) and not p["mine"] and p["mins"] == 0:
+            continue  # never played and not yours: nothing to compare
+        # predictions need a match log; fall back to weekly data for players without a fetched history
+        q = p if p["log"] else dict(p, log=[dict(gw=g, pts=pt, mins=m) for g, pt, m in wk])
+        preds = predict_points(q, teams)
+        n5_label, _, _ = next5(p, teams)
+        t = teams[p["tid"]]
+        attack = p["pos"] in ("MID", "FWD")
+        key = "def_rating" if attack else "att_rating"
+        chips = [[x["gw"], teams[x["opp_id"]]["name"], 1 if x["home"] else 0,
+                  round(teams[x["opp_id"]][key], 2)] for x in t["run"]]
+        rs = match_ratings(p, teams) if p["log"] else []
+        played = [pt for _, pt, m in wk if m > 0]
+        last3 = [pt for _, pt, _ in wk[-3:]]
+        rows.append(dict(
+            id=p["id"], n=p["name"], t=t["name"], tf=t["full"], tid=p["tid"], pos=p["pos"], code=p.get("code"),
+            own="You" if p["mine"] else (p["owner"] or "Free agent"), mine=p["mine"], fa=not p["owner"],
+            st=p["status"], news=p["news"], ch=p["chance"],
+            tot=p["total"], ppg=round(p["ppg"], 2), ppa=round(sum(played) / len(played), 2) if played else 0,
+            mins=p["mins"], starts=p["starts"], gp=p["gp"], g=p["g"], a=p["a"], xg=round(p["xg"], 2),
+            xa=round(p["xa"], 2), dc=round(p["dc_hit"], 2) if p["pos"] in ("DEF", "MID") else None,
+            l3=round(sum(last3) / len(last3), 2) if last3 else 0, wk=wk,
+            pr=[[x["gw"], round(x["pts"], 1)] for x in preds],
+            r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
+            n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2)))
+    played_t = [x for x in teams.values() if x["gp"]]
+    avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
+    return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
+                avg=avgs, photo=PHOTO, badge=BADGE)
+
+
+COMPARE_JS = r"""
+(function(){
+const D = JSON.parse(document.getElementById('cmp-data').textContent);
+const P = {}; D.players.forEach(p => P[p.id] = p);
+const MAX = 4;
+let picks = [];
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ini = n => n.replace(/\./g,' ').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+const photo = (p, s) => `<span class="ph" style="--s:${s}px"><span class="ini">${esc(ini(p.n))}</span>${p.code ? `<img src="${D.photo.replace('{code}', p.code)}" alt="" onerror="this.remove()">` : ''}</span>`;
+const badge = (tid, s) => { const t = D.teams[tid]; return t ? `<img class="badge" src="${D.badge.replace('{code}', t.c)}" width="${s}" height="${s}" alt="" onerror="this.style.visibility='hidden'">` : ''; };
+const FIX = {'Easy':1.2,'Good':1.1,'Average':1,'Tough':0.9,'Very tough':0.8,'Blank':0.7};
+const avail = p => (p.st === 'i' || p.st === 's' || p.st === 'u' || p.st === 'n') ? 0 : (p.ch == null ? 1 : p.ch / 100);
+
+// one number per player for the verdict: recent form, season output, and the next-3 prediction
+// (which already accounts for opponents, home/away and chance of playing)
+function score(p){
+  const next3 = p.pr.reduce((s, x) => s + x[1], 0) / Math.max(p.pr.length, 1);
+  return 0.3 * p.l3 + 0.3 * p.ppg + 0.4 * next3;
+}
+function save(){ history.replaceState(null, '', picks.length ? '#compare=' + picks.join(',') : location.pathname + location.search); }
+function add(id){
+  id = +id; if (!P[id] || picks.includes(id)) return;
+  if (picks.length >= MAX) picks.shift();
+  picks.push(id); save(); draw();
+}
+function remove(id){ picks = picks.filter(x => x !== +id); save(); draw(); }
+
+// ---------- search
+function results(){
+  const q = $('#cmp-q').value.trim().toLowerCase();
+  const pos = $('#cmp-pos').value, who = $('#cmp-who').value;
+  let rs = D.players.filter(p => (!pos || p.pos === pos) && (who === 'all' || (who === 'fa' && p.fa) || (who === 'mine' && p.mine))
+    && (!q || p.n.toLowerCase().includes(q) || p.tf.toLowerCase().includes(q) || p.t.toLowerCase().includes(q)));
+  rs.sort((a, b) => b.ppg - a.ppg);
+  rs = rs.slice(0, 8);
+  $('#cmp-res').innerHTML = rs.length ? rs.map(p => `<button class="cmp-r" data-id="${p.id}">${photo(p, 30)}
+     <span><b>${esc(p.n)}</b><small>${badge(p.tid, 12)}${esc(p.t)} · ${p.pos} · ${esc(p.own)}</small></span>
+     <em>${p.ppg.toFixed(1)} pts/g</em></button>`).join('') : '<p class="empty">No players match.</p>';
+}
+
+// ---------- compare grid
+function weekBars(p, top){
+  const bars = p.wk.map(([gw, pts, m]) => {
+    const h = m ? Math.max(4, pts / top * 46) : 3;
+    return `<i class="${m ? (m >= 60 ? 'f' : 'p') : 'd'}" style="height:${h}px" title="GW${gw}: ${m ? pts + ' pts, ' + m + ' min' : 'did not play'}"></i>`;
+  }).join('');
+  const pr = p.pr.map(([gw, pts]) => `<i class="x" style="height:${Math.max(3, pts / top * 46)}px" title="GW${gw} predicted: ${pts} pts"></i>`).join('');
+  return `<div class="cw">${bars}<span class="cs"></span>${pr}</div>`;
+}
+function chips(p){
+  const attack = p.pos === 'MID' || p.pos === 'FWD';
+  const avg = attack ? D.avg.def_rating : D.avg.att_rating;
+  return p.ch5.map(([gw, opp, home, v]) => {
+    const r = attack ? v / avg : avg / Math.max(v, 0.1);
+    const c = r >= 1.12 ? 'good' : r <= 0.9 ? 'bad' : '';
+    return `<span class="cc ${c}" title="GW${gw} vs ${esc(opp)} (${home ? 'home' : 'away'}): they ${attack ? 'concede' : 'score'} ${v.toFixed(1)}/game">${esc(opp)}<small>${home ? 'H' : 'A'}</small></span>`;
+  }).join('') || '<span class="mut">No fixtures</span>';
+}
+const ROWS = [
+  ['Status', p => p.st === 'a' && (p.ch == null || p.ch >= 100) ? '<span class="pos">Available</span>' : `<span class="neg">${esc(p.news || 'Flagged')}</span>`, p => avail(p)],
+  ['Owner', p => p.mine ? '<span class="tag you">You</span>' : p.fa ? '<span class="tag fa">Free agent</span>' : `<span class="tag">${esc(p.own)}</span>`, null],
+  ['Total points', p => p.tot, p => p.tot],
+  ['Points per game', p => p.ppg.toFixed(1) + '<small>per team game</small>', p => p.ppg],
+  ['When he plays', p => p.ppa.toFixed(1) + '<small>per appearance</small>', p => p.ppa],
+  ['Last 3 gameweeks', p => p.l3.toFixed(1) + '<small>avg pts</small>', p => p.l3],
+  ['Next 3 predicted', p => p.pr.reduce((s, x) => s + x[1], 0).toFixed(1) + '<small>' + p.pr.map(x => x[1]).join(' · ') + '</small>', p => p.pr.reduce((s, x) => s + x[1], 0)],
+  ['vs league avg', p => { const g = p.ppg - p.bm; return `<span class="${g > 0 ? 'pos' : 'neg'}">${g >= 0 ? '+' : ''}${g.toFixed(1)}</span><small>${p.pos} avg ${p.bm.toFixed(1)}</small>`; }, p => p.ppg - p.bm],
+  ['Starts', p => `${p.starts} of ${p.gp}<small>${p.mins} min</small>`, p => p.gp ? p.starts / p.gp : 0],
+  ['Goals + assists', p => `${p.g + p.a}<small>${p.g}G ${p.a}A · xGI ${(p.xg + p.xa).toFixed(1)}</small>`, p => p.g + p.a],
+  ['Match rating', p => p.r5 == null ? '<span class="mut">-</span>' : (p.r5 >= 0.5 ? 'Top ' + Math.max(1, Math.round((1 - p.r5) * 100)) + '%' : 'Bottom ' + Math.max(1, Math.round(p.r5 * 100)) + '%') + `<small>last ${p.r5n}, vs ${p.pos}</small>`, p => p.r5 == null ? -1 : p.r5],
+  ['Defensive contribution', p => p.dc == null ? '<span class="mut">-</span>' : Math.round(p.dc * 100) + '%<small>of games hit bonus</small>', p => p.dc == null ? -1 : p.dc],
+  ['Next 5 fixtures', p => `<span class="pill ${({'Easy':'e1','Good':'e2','Average':'e3','Tough':'e4','Very tough':'e5','Blank':'e5'})[p.n5] || 'e3'}">${p.n5}</span><div class="ccs">${chips(p)}</div>`, p => FIX[p.n5] || 1],
+];
+
+function verdict(ps){
+  if (ps.length < 2) return '';
+  const sc = ps.map(p => ({p, s: score(p) * (0.5 + 0.5 * avail(p))}));
+  sc.sort((a, b) => b.s - a.s);
+  const best = sc[0].p;
+  // when one of yours is in the comparison, measure the winner against him: he's the one you'd drop
+  const yours = ps.find(p => p.mine && p.id !== best.id);
+  const second = yours || sc[1].p;
+  const why = [];
+  const d1 = best.ppg - second.ppg; if (d1 >= 0.5) why.push(`scores ${d1.toFixed(1)} more points per game than ${esc(second.n)}`);
+  const d2 = best.l3 - second.l3; if (d2 >= 1) why.push(`is in better recent form (${best.l3.toFixed(1)} vs ${second.l3.toFixed(1)} over the last 3)`);
+  const pa = best.pr.reduce((s, x) => s + x[1], 0), pb = second.pr.reduce((s, x) => s + x[1], 0);
+  if (pa - pb >= 1) why.push(`is predicted ${(pa - pb).toFixed(1)} more points over the next 3`);
+  if ((FIX[best.n5] || 1) > (FIX[second.n5] || 1)) why.push(`has easier fixtures (${best.n5} vs ${second.n5})`);
+  const sa = best.gp ? best.starts / best.gp : 0, sb = second.gp ? second.starts / second.gp : 0;
+  if (sa - sb >= 0.2) why.push(`starts more often (${best.starts} of ${best.gp} vs ${second.starts} of ${second.gp})`);
+  if (avail(second) < 1 && avail(best) >= avail(second)) why.push(`${esc(second.n)} is flagged: ${esc(second.news || 'doubtful')}`);
+  const sSecond = sc.find(x => x.p.id === second.id).s;
+  const margin = (sc[0].s - sSecond) / Math.max(sSecond, 0.5);
+  const strength = margin > 0.25 ? 'Clear edge' : margin > 0.08 ? 'Edge' : 'Too close to call, slight lean';
+  let action = '';
+  const mine = ps.find(p => p.mine);
+  if (mine && best.id !== mine.id) action = best.fa ? ` Worth a waiver claim: drop ${esc(mine.n)} for ${esc(best.n)}.` :
+      !best.mine ? ` ${esc(best.n)} is owned by ${esc(best.own)}, so a trade would be the way.` : '';
+  if (mine && best.id === mine.id) action = ` Keep ${esc(mine.n)}.`;
+  return `<div class="cv"><span class="cv-k">${strength}</span><b>${esc(best.n)}</b>
+    <p>${why.length ? esc(best.n) + ' ' + why.join(', ') + '.' : 'The numbers are very close across the board.'}${action}</p></div>`;
+}
+
+function draw(){
+  const ps = picks.map(id => P[id]).filter(Boolean);
+  $('#cmp-count').textContent = ps.length ? `${ps.length} of ${MAX} selected` : 'Pick up to 4 players';
+  if (!ps.length){ $('#cmp-grid').innerHTML = '<p class="empty">Search for a player above, tap "Find replacements" on one of yours, or use the Compare button next to any player in the report.</p>'; $('#cmp-verdict').innerHTML=''; return; }
+  const top = Math.max(10, ...ps.flatMap(p => p.wk.map(w => w[1]).concat(p.pr.map(x => x[1]))));
+  const head = ps.map(p => `<th><div class="ch">${photo(p, 52)}<div><b>${esc(p.n)}</b><small>${badge(p.tid, 14)}${esc(p.tf)} · ${p.pos}</small></div>
+      <button class="cx" data-id="${p.id}" title="Remove">×</button></div>${weekBars(p, top)}</th>`).join('');
+  const body = ROWS.map(([label, fmt, val]) => {
+    let bestV = null;
+    if (val && ps.length > 1){ const vs = ps.map(val); const mx = Math.max(...vs); if (vs.filter(v => v === mx).length < vs.length) bestV = mx; }
+    return `<tr><th>${label}</th>${ps.map(p => `<td class="${bestV != null && val(p) === bestV ? 'best' : ''}">${fmt(p)}</td>`).join('')}</tr>`;
+  }).join('');
+  const minW = (innerWidth < 600 ? 92 : 150) + ps.length * (innerWidth < 600 ? 140 : 190);
+  $('#cmp-grid').innerHTML = `<div class="tw"><table class="ct" style="min-width:${minW}px"><thead><tr><th class="ct-l">
+      <span class="lgx"><i class="f"></i>60+ <i class="p"></i>sub <i class="d"></i>DNP <i class="x"></i>predicted</span></th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  $('#cmp-verdict').innerHTML = verdict(ps);
+}
+
+function replacements(id){
+  const me = P[id]; if (!me) return;
+  const pool = D.players.filter(p => p.pos === me.pos && p.fa && avail(p) > 0 && p.gp && p.starts / p.gp >= 0.5)
+    .sort((a, b) => score(b) - score(a)).slice(0, MAX - 1);
+  picks = [me.id, ...pool.map(p => p.id)]; save(); draw();
+  document.getElementById('compare').scrollIntoView({behavior: 'smooth'});
+}
+
+// ---------- wiring
+$('#cmp-q').addEventListener('input', results);
+$('#cmp-pos').addEventListener('change', results);
+$('#cmp-who').addEventListener('change', results);
+$('#cmp-res').addEventListener('click', e => { const b = e.target.closest('.cmp-r'); if (b){ add(b.dataset.id); } });
+$('#cmp-grid').addEventListener('click', e => { const b = e.target.closest('.cx'); if (b) remove(b.dataset.id); });
+$('#cmp-clear').addEventListener('click', () => { picks = []; save(); draw(); });
+$('#cmp-mine').innerHTML = D.players.filter(p => p.mine).sort((a, b) => ['GK','DEF','MID','FWD'].indexOf(a.pos) - ['GK','DEF','MID','FWD'].indexOf(b.pos))
+  .map(p => `<option value="${p.id}">${esc(p.n)} (${p.pos})</option>`).join('');
+$('#cmp-repl').addEventListener('click', () => replacements($('#cmp-mine').value));
+document.addEventListener('click', e => {
+  const b = e.target.closest('.cmp-add'); if (!b || b.classList.contains('cmp-repl-btn')) return;
+  e.preventDefault(); add(b.dataset.id);
+  const n = P[+b.dataset.id];
+  b.textContent = '✓ Added'; setTimeout(() => b.textContent = '+ Compare', 1500);
+  const t = document.getElementById('cmp-toast'); t.textContent = `${n ? n.n : 'Player'} added to Compare (${picks.length}/${MAX})`;
+  t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 2200);
+});
+document.addEventListener('click', e => { const b = e.target.closest('.cmp-repl-btn'); if (b){ e.preventDefault(); replacements(b.dataset.id); } });
+const m = location.hash.match(/compare=([\d,]+)/);
+if (m) picks = m[1].split(',').map(Number).filter(id => P[id]).slice(0, MAX);
+results(); draw();
+})();
+"""
+
+
+def compare_section(d, players, teams):
+    data = json.dumps(compare_data(d, players, teams), separators=(",", ":")).replace("</", "<\\/")
+    return f"""<section id="compare"><h2>Compare players</h2>
+<p class="note">Line up to 4 players side by side before a waiver claim or trade. Search any Premier League player, or pick one
+of yours and tap Find replacements to see him next to the best free agents at his position. Green = best in that row.
+You can also tap <b>+ Compare</b> next to any player elsewhere in the report. Your comparison is saved in the page
+address, so you can bookmark or share it. Data is from this morning's build; to refresh mid-day, run the workflow on GitHub.</p>
+<div class="card cmp-tools">
+<div class="cmp-row"><label>Find replacements for</label><select id="cmp-mine"></select>
+<button id="cmp-repl" class="sb on">Find replacements</button></div>
+<div class="cmp-row"><input id="cmp-q" type="search" placeholder="Search a player or club" autocomplete="off">
+<select id="cmp-pos"><option value="">All positions</option><option>GK</option><option>DEF</option><option>MID</option><option>FWD</option></select>
+<select id="cmp-who"><option value="all">Everyone</option><option value="fa">Free agents only</option><option value="mine">My players</option></select></div>
+<div id="cmp-res" class="cmp-res"></div></div>
+<div class="cmp-bar"><span id="cmp-count"></span><button id="cmp-clear" class="sb">Clear</button></div>
+<div id="cmp-verdict"></div>
+<div id="cmp-grid"></div>
+<div id="cmp-toast" class="toast"></div>
+<script type="application/json" id="cmp-data">{data}</script>
+<script>{COMPARE_JS}</script></section>"""
+
+
 def render(d, players, teams, log=None):
     TEAMS.clear()
     TEAMS.update(teams)
@@ -2037,7 +2259,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a><a href="#vsleague">Me vs the league</a>
+<nav><div class="in"><a href="#season">Season</a><a href="#teams">Teams &amp; matchups</a><a href="#squad">My squad</a><a href="#compare">Compare</a><a href="#vsleague">Me vs the league</a>
 <a href="#finishing">xG vs actual</a><a href="#market">Free agents</a><a href="#predictions">Predictions</a></div></nav>
 <main>
 
@@ -2046,6 +2268,8 @@ def render(d, players, teams, log=None):
 {teams_section(d, teams, players)}
 
 {squad_review_section(squad, players, teams, d)}
+
+{compare_section(d, players, teams)}
 
 {benchmark_section(d, players, squad)}
 
