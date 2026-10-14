@@ -2465,7 +2465,7 @@ def compare_data(d, players, teams):
             r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
-            mv=moves_data(p)))
+            mv=moves_data(p), fv=finishing_verdict(p)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
@@ -2639,6 +2639,11 @@ function fixNote(p){
   const dull = m.sen < 0.35 ? ' Fixtures matter less for him: most of his points are steady ones.' : '';
   return `<b>${m.sl} stretch</b> <span class="mut">for a player who scores from ${how}.${dull}</span>`;
 }
+const FVC = {'Due: underperforming': 'pos', 'Slightly unlucky': 'pos', 'Running hot: expect cooling': 'neg'};
+function finLine(p){
+  const d = (p.g + p.a) - (p.xg + p.xa);
+  return `<span>${p.g}G ${p.a}A from ${p.xg.toFixed(1)} xG + ${p.xa.toFixed(1)} xA (${d >= 0 ? '+' : ''}${d.toFixed(1)}) · <b class="${FVC[p.fv] || ''}">${esc(p.fv)}</b></span>`;
+}
 const roleTxt = p => { const m = mv(p); return m.ro === 'overlooked' ? 'Overlooked on a strong team' :
   m.ro === 'focal' ? `Focal point: ${Math.round(m.sh * 100)}% of ${esc(p.t)}'s chances` : ''; };
 
@@ -2668,7 +2673,7 @@ function optRow({p, t}, me, trade){
   return `<div class="opt"><div class="who">${photo(p, 42)}<div><div class="nm">${esc(p.n)}${m.ro ? `<span class="role">${m.ro === 'focal' ? 'Focal point' : 'Overlooked'}</span>` : ''}</div>
       <div class="tm">${badge(p.tid, 14)}${esc(p.t)} · ${trade ? 'Owned by ' + esc(p.own) : 'Free agent'}</div>
       <div class="tm"><b style="color:var(--ink)">${f1(m.a3)}</b>&nbsp;pts a week · ${m.mm}' a game</div></div></div>
-    <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}${vsLine(p, me)}</div>
+    <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
     <div class="opt-acts"><button class="sb plan-get ${planned ? 'planned' : ''}" data-id="${p.id}">${planned ? '✓ Planning to get' : 'Plan to get'}</button>
       <button class="sb cmp-add" data-id="${p.id}">+ Compare</button></div></div>`;
 }
@@ -2708,7 +2713,8 @@ function card({p, why}){
       <button class="sb cmp-repl-btn" data-id="${p.id}">All replacements</button></div></div>
     <div class="mv-facts"><div><div class="mv-k">Last 3: where his points came from</div>${breakdown(p, 0)}</div>
       <div><div class="mv-k">Minutes</div>${minutes(p)}</div>
-      <div><div class="mv-k">Next 5</div>${fixtures(p)}<div class="bd-l">${fixNote(p)}</div></div></div></div>
+      <div><div class="mv-k">Next 5</div>${fixtures(p)}<div class="bd-l">${fixNote(p)}</div></div>
+      <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div></div></div>
     <div class="mv-opts"><h4>Free agents who pass both tests</h4>${fa.length ? fa.map(x => optRow(x, p, false)).join('') :
       `<p class="mv-none">No free-agent ${POSW[p.pos]}s pass both tests right now.</p>`}
     ${tr.length ? `<h4>Better, but owned: trade targets</h4>${tr.map(x => optRow(x, p, true)).join('')}` : ''}</div></div>`;
@@ -2857,10 +2863,17 @@ const ROWS = [
   ['Points per game', p => p.ppg.toFixed(1) + '<small>per team game</small>', p => p.ppg, (p, b) => [p.ppg - b.ppg, 1, '']],
   ['When he plays', p => p.ppa.toFixed(1) + '<small>per appearance</small>', p => p.ppa, (p, b) => [p.ppa - b.ppa, 1, '']],
   ['vs league avg', p => { const g = p.ppg - p.bm; return `<span class="${g > 0 ? 'pos' : 'neg'}">${g >= 0 ? '+' : ''}${g.toFixed(1)}</span><small>${p.pos} avg ${p.bm.toFixed(1)}</small>`; }, p => p.ppg - p.bm, null],
-  ['Goals + assists', p => `${p.g + p.a}<small>${p.g}G ${p.a}A · xGI ${(p.xg + p.xa).toFixed(1)}</small>`, p => p.g + p.a, (p, b) => [(p.g + p.a) - (b.g + b.a), 0, '']],
+  ['xG and xA vs actual', p => finishing(p), null, (p, b) => [(p.g + p.a) - (b.g + b.a), 0, 'G+A']],
   ['Match rating', p => p.r5 == null ? '<span class="mut">-</span>' : (p.r5 >= 0.5 ? 'Top ' + Math.max(1, Math.round((1 - p.r5) * 100)) + '%' : 'Bottom ' + Math.max(1, Math.round(p.r5 * 100)) + '%') + `<small>last ${p.r5n}, vs ${p.pos}</small>`, p => p.r5 == null ? -1 : p.r5, null],
   ['Defensive contribution', p => p.dc == null ? '<span class="mut">-</span>' : Math.round(p.dc * 100) + '%<small>of games hit bonus</small>', p => p.dc == null ? -1 : p.dc, (p, b) => p.dc == null || b.dc == null ? null : [Math.round((p.dc - b.dc) * 100), 0, '%']],
 ];
+// season goals and assists against the chances behind them; negative = due more than he's had
+const FVC = {'Due: underperforming': 'pos', 'Slightly unlucky': 'pos', 'Running hot: expect cooling': 'neg'};
+function finishing(p){
+  const d = (p.g + p.a) - (p.xg + p.xa);
+  return `${p.g}G ${p.a}A <span class="mut">from</span> ${p.xg.toFixed(1)} xG ${p.xa.toFixed(1)} xA`
+    + `<small>${d >= 0 ? '+' : ''}${d.toFixed(1)} vs expected · <b class="${FVC[p.fv] || ''}">${esc(p.fv)}</b></small>`;
+}
 function vsMine(p, base, dfn){
   if (!base || !dfn || p.id === base.id) return '';
   const r = dfn(p, base); if (!r) return '';
@@ -3444,7 +3457,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#finishing">xG vs actual</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#market">Free agents</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -3454,20 +3467,11 @@ def render(d, players, teams, log=None):
 
 {benchmark_section(d, players, squad)}
 
-<section id="finishing"><h2>xG and xA vs actual returns</h2>
-<p class="note">+/- is actual minus expected. Positive = finishing above their chances, negative = due for more.</p>
-{finishing_section(players)}</section>
-
 {squad_review_section(squad, players, teams, d)}
 
 {teams_section(d, teams, players, log)}
 
 {compare_section(d, players, teams)}
-
-<section id="market"><h2>Best free agents</h2>
-<p class="note">Regular starters nobody in Hope Bros owns, ranked by points per game this season, with how good their
-next {HORIZON} matchups look.</p>
-{market_section(players, teams)}</section>
 
 {predictions_section(log, players) if log is not None else ""}
 
