@@ -2230,6 +2230,183 @@ he was on the pitch, which is the fairer read for anyone who's been injured. Sor
 </section>"""
 
 
+# ---------------------------------------------------------------- who to drop, who to get
+#
+# Ben's rules, using only things that have actually happened (no projected points):
+#   1. Above the bar: points per week over his team's last 3 gameweeks beat the average a counted
+#      player at his position scores for the rest of Hope Bros.
+#   2. Won his spot: started each of those 3 and averaged NAILED_MINS+ minutes.
+#   Exception, "due": nailed or minutes rising, chances created at bar level, and a good next 2.
+#   Then ranked by how well his next 5 fit the way he scores, team pairing, and his role.
+
+NAILED_MINS = 80        # average minutes over the last 3 to count as having won his spot
+FOCAL_SHARE = 0.25      # share of his team's xG + xA that makes him "the one everything goes through"
+STRONG_TEAMS = 6        # top N by attack rating count as strong teams
+DUE_PCTILE = 0.75       # chances (xG+xA per 90) over the last 3 must be in the top 25% at his position
+
+PT_CATS = [  # (key, label, FPL explain stats)
+    ("min", "Minutes", ("minutes",)),
+    ("g", "Goals", ("goals_scored",)),
+    ("a", "Assists", ("assists",)),
+    ("cs", "Clean sheets", ("clean_sheets",)),
+    ("dc", "Def. contribution", ("defensive_contribution",)),
+    ("bon", "Bonus", ("bonus",)),
+    ("sv", "Saves", ("saves", "penalties_saved")),
+]
+NEG_STATS = ("goals_conceded", "yellow_cards", "red_cards", "own_goals", "penalties_missed")
+ATT_DEFAULT = {"GK": 0.0, "DEF": 0.3, "MID": 0.85, "FWD": 1.0}  # attacking share of fixture-driven points
+
+
+def split_points(src):
+    """{stat: pts} -> {cat: pts} plus 'neg' for deductions."""
+    out = {k: 0 for k, _, _ in PT_CATS}
+    out["neg"] = 0
+    for stat, pts in (src or {}).items():
+        for k, _, stats in PT_CATS:
+            if stat in stats:
+                out[k] += pts
+                break
+        else:
+            out["neg"] += pts if pts < 0 else 0
+    return out
+
+
+def fix_label(v):
+    if v == 0:
+        return "Blank"
+    return ("Great" if v >= 1.15 else "Good" if v >= 1.04 else "Average" if v > 0.93
+            else "Tough" if v > 0.84 else "Poor")
+
+
+def assess(d, players, teams):
+    """Adds p['as'] to every player: last-3 breakdown, the two gates, the due-to-come-into-form check,
+    fixture fit for how he scores, and his role on his team."""
+    _, _, _, bar = league_benchmark(d, players)
+    live, live_min = d.get("live", {}), d.get("live_min", {})
+    src_all, under = d.get("live_src", {}), d.get("live_under", {})
+    done_gws = sorted(live)
+
+    # each team's last 3 gameweeks with a match, and how many matches in each
+    team_gws = {}
+    for t in teams.values():
+        n = {}
+        for r in t["results"]:
+            if r.get("gw"):
+                n[r["gw"]] = n.get(r["gw"], 0) + 1
+        team_gws[t["id"]] = [(g, n[g]) for g in sorted(n)[-3:]]
+
+    # team chance totals (season), for the "focal point" share
+    team_xgi = {}
+    for p in players.values():
+        team_xgi[p["tid"]] = team_xgi.get(p["tid"], 0) + p["xg"] + p["xa"]
+    # strong = best combined rank of league position and attack rating
+    att_rank = {t["id"]: i for i, t in enumerate(sorted(teams.values(), key=lambda t: -t.get("att_rating", 0)), 1)}
+    strong = {t["id"] for t in sorted(teams.values(), key=lambda t: (t.get("table_pos", 99) + att_rank[t["id"]],
+                                                                       t.get("table_pos", 99)))[:STRONG_TEAMS]}
+    weak = {t["id"] for t in teams.values() if t.get("table_pos", 0) > len(teams) / 2}
+    # the two most sought-after players at each club (by draft rank), so "overlooked" means not one of them
+    stars = {}
+    for p in sorted(players.values(), key=lambda p: p["draft_rank"]):
+        stars.setdefault(p["tid"], [])
+        if len(stars[p["tid"]]) < 2:
+            stars[p["tid"]].append(p["id"])
+
+    for p in players.values():
+        gws = team_gws.get(p["tid"], [])
+        rows = []
+        for gw, n in gws:
+            u = under.get(gw, {}).get(p["id"], (0, 0, 0, 0))
+            rows.append(dict(gw=gw, games=n, pts=live.get(gw, {}).get(p["id"], 0),
+                             mins=min(live_min.get(gw, {}).get(p["id"], 0), 90 * n),
+                             st=u[3], xg=u[0], xa=u[1], dca=u[2],
+                             src=split_points(src_all.get(gw, {}).get(p["id"]))))
+        k = len(rows)
+        pts3 = sum(r["pts"] for r in rows)
+        mins3 = sum(r["mins"] for r in rows)
+        games3 = sum(r["games"] for r in rows)
+        cat3 = {c: sum(r["src"][c] for r in rows) for c in [x[0] for x in PT_CATS] + ["neg"]}
+        avg3 = pts3 / k if k else 0.0
+        avg_min = mins3 / games3 if games3 else 0
+        starts3 = sum(min(r["st"], r["games"]) for r in rows)
+        xgi3 = sum(r["xg"] + r["xa"] for r in rows)
+        xgi90 = xgi3 / mins3 * 90 if mins3 >= 90 else 0.0
+        b = bar.get(p["pos"], 0)
+
+        above = k > 0 and avg3 >= b
+        nailed = games3 > 0 and starts3 >= games3 and avg_min >= NAILED_MINS
+        # won his spot recently: started the last 2 and played the minutes, after a smaller role before that
+        last2 = rows[-2:]
+        g2 = sum(r["games"] for r in last2)
+        won = (not nailed and k >= 3 and g2 and sum(min(r["st"], r["games"]) for r in last2) >= g2
+               and sum(r["mins"] for r in last2) / g2 >= NAILED_MINS)
+        rising = k >= 2 and rows[-1]["mins"] >= NAILED_MINS * rows[-1]["games"] and rows[-1]["mins"] > rows[0]["mins"]
+
+        # how he gets his points this season: attacking returns vs clean sheets vs steady points
+        season = split_points({})
+        for gw in done_gws:
+            for c, v in split_points(src_all.get(gw, {}).get(p["id"])).items():
+                season[c] += v
+        att_pts = season["g"] + season["a"]
+        cs_pts = season["cs"]
+        steady = season["min"] + season["dc"] + season["bon"] + season["sv"]
+        fx_pts = att_pts + cs_pts
+        own = att_pts / fx_pts if fx_pts else ATT_DEFAULT[p["pos"]]
+        trust = fx_pts / (fx_pts + 10)  # a few returns shouldn't override what his position usually scores from
+        w_att = trust * own + (1 - trust) * ATT_DEFAULT[p["pos"]]
+        sens = fx_pts / (fx_pts + steady) if fx_pts + steady else (0.6 if p["pos"] != "GK" else 0.5)
+
+        t = teams[p["tid"]]
+        fits = []
+        for x in t["run"]:
+            f = w_att * x["att"] + (1 - w_att) * (1 / x["dfn"])
+            fits.append(dict(gw=x["gw"], opp=x["opp"], oid=x["opp_id"], home=x["home"], fit=round(f, 2),
+                             l=fix_label(f)))
+        stretch = sum(f["fit"] for f in fits) / HORIZON
+        next2 = [f for f in fits if f["gw"] < d["next"] + 2]
+        n2 = sum(f["fit"] for f in next2) / 2
+
+        share = (p["xg"] + p["xa"]) / team_xgi[p["tid"]] if team_xgi.get(p["tid"]) else 0
+        if p["tid"] in strong and p["pos"] != "GK" and p["id"] not in stars.get(p["tid"], []):
+            role = "overlooked"
+        elif p["tid"] in weak and share >= FOCAL_SHARE:
+            role = "focal"
+        else:
+            role = None
+
+        p["as"] = dict(
+            rows=rows, k=k, pts3=pts3, avg3=round(avg3, 2), avg_min=round(avg_min), starts3=starts3, games3=games3,
+            cat3=cat3, xgi3=round(xgi3, 2), xgi90=round(xgi90, 2),
+            dc3=sum(r["dca"] for r in rows), bar=round(b, 2), above=above, nailed=nailed or won, won=won, rising=rising,
+            w_att=round(w_att, 2), sens=round(sens, 2), fits=fits, stretch=round(stretch, 3),
+            stretch_l=fix_label(stretch) if fits else "Blank", next2=round(n2, 3),
+            share=round(share, 3), role=role, team_strong=p["tid"] in strong, team_weak=p["tid"] in weak,
+        )
+
+    # "due": chances over the last 3 in the top quarter at his position (or reliable defensive points
+    # for defenders), minutes there or rising, and a good next 2
+    for pos in POS.values():
+        group = sorted(p["as"]["xgi90"] for p in players.values() if p["pos"] == pos and p["as"]["avg_min"] >= 60)
+        cut = group[int(len(group) * DUE_PCTILE)] if group else 99
+        for p in players.values():
+            if p["pos"] != pos:
+                continue
+            a = p["as"]
+            chances = a["xgi90"] >= cut and a["xgi3"] >= 0.6
+            dc_steady = pos in ("DEF", "MID") and sum(1 for r in a["rows"] if r["src"]["dc"] > 0) >= 2
+            a["chances"] = chances
+            a["due"] = (not a["above"] and (a["nailed"] or a["rising"]) and (chances or dc_steady)
+                        and a["next2"] >= 1.04)
+            a["due_why"] = (("Creating chances like a top-quarter " + pos + f" ({a['xgi3']:.1f} xG+xA in 3)")
+                            if chances else "Banking defensive contribution points") if a["due"] else ""
+            a["passes"] = (a["above"] or a["due"]) and (a["nailed"] or (a["due"] and a["rising"]))
+            a["fails"] = [x for x in (
+                None if a["above"] or a["due"] else f"Below the {pos} bar ({a['avg3']:.1f} a week vs {a['bar']:.1f})",
+                None if a["nailed"] else (f"Averaging {a['avg_min']} minutes" if a["starts3"] >= a["games3"]
+                                          else f"Started {a['starts3']} of his last {a['games3']}"),
+            ) if x]
+    return bar
+
+
 # ---------------------------------------------------------------- interactive player comparison
 
 def compare_data(d, players, teams):
@@ -2266,11 +2443,30 @@ def compare_data(d, players, teams):
             pr=[[x["gw"], round(x["pts"], 1)] for x in preds],
             r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
-            sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min)))
+            sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
+            mv=moves_data(p)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
-                avg=avgs, photo=PHOTO, badge=BADGE)
+                avg=avgs, photo=PHOTO, badge=BADGE, cats=[[k, label] for k, label, _ in PT_CATS] + [["neg", "Deductions"]],
+                bar={k: round(v, 2) for k, v in pooled.items()}, nailed=NAILED_MINS, gw=d["next"])
+
+
+def moves_data(p):
+    """The compact slice of p['as'] the Compare tab needs."""
+    a = p.get("as")
+    if not a:
+        return None
+    return dict(
+        a3=a["avg3"], p3=a["pts3"], k=a["k"], mm=a["avg_min"], st=a["starts3"], g3=a["games3"],
+        r=[[r["gw"], r["pts"], r["mins"], r["st"], r["games"]] for r in a["rows"]],
+        c=[a["cat3"][k] for k, _, _ in PT_CATS] + [a["cat3"]["neg"]],
+        x3=a["xgi3"], dc3=a["dc3"],
+        ab=a["above"], nl=a["nailed"], wn=a["won"], du=a["due"], dw=a["due_why"], ps=a["passes"], fl=a["fails"],
+        fx=[[f["gw"], f["opp"], 1 if f["home"] else 0, f["fit"], f["l"]] for f in a["fits"]],
+        sv=a["stretch"], sl=a["stretch_l"], n2=a["next2"], sen=a["sens"], wa=a["w_att"],
+        ro=a["role"], sh=a["share"],
+    )
 
 
 COMPARE_JS = r"""
