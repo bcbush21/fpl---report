@@ -1,0 +1,32 @@
+name: Dev snapshot
+
+# Development only: on pushes to the dev branch, build the report and save a copy of the
+# raw FPL data, so changes can be tested against real numbers without touching the live site.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python fpl_report.py
+        env:
+          REPORT_PATH: dev/index.html
+          SNAPSHOT_OUT: dev/snapshot.pkl.gz
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      - name: Save snapshot
+        run: |
+          git config user.name "fpl-report-bot"
+          git config user.email "fpl-report-bot@users.noreply.github.com"
+          git add -f dev/snapshot.pkl.gz dev/index.html
+          git commit -m "Dev snapshot [skip ci]" && git push origin HEAD:dev

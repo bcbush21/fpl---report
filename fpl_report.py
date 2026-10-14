@@ -143,10 +143,22 @@ def load_data():
     def live(gw):
         try:
             els = get(f"{DRAFT}/event/{gw}/live").get("elements", {})
-            return gw, {int(k): (v.get("stats", {}).get("total_points", 0), v.get("stats", {}).get("minutes", 0),
-                                 v.get("stats", {}).get("bps", 0)) for k, v in els.items()}
         except requests.RequestException:
             return gw, {}
+        out = {}
+        for k, v in els.items():
+            s = v.get("stats", {})
+            # where the points came from: {stat: points}, summed across a double gameweek's fixtures
+            src = {}
+            for block in v.get("explain", []) or []:
+                for item in (block[0] if block and isinstance(block[0], list) else []):
+                    st = item.get("stat")
+                    if st and item.get("points"):
+                        src[st] = src.get(st, 0) + item["points"]
+            under = (round(s.get("expected_goals", 0) or 0, 2), round(s.get("expected_assists", 0) or 0, 2),
+                     s.get("defensive_contribution", 0) or 0, s.get("starts", 0) or 0)
+            out[int(k)] = (s.get("total_points", 0), s.get("minutes", 0), s.get("bps", 0), src, under)
+        return gw, out
 
     jobs = [(e["entry_id"], gw) for e in entries if e.get("entry_id") for gw in gws]
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -155,6 +167,9 @@ def load_data():
     d["live"] = {gw: {k: v[0] for k, v in m.items()} for gw, m in raw.items()}
     d["live_min"] = {gw: {k: v[1] for k, v in m.items()} for gw, m in raw.items()}
     d["live_bps"] = {gw: {k: v[2] for k, v in m.items()} for gw, m in raw.items()}
+    d["live_src"] = {gw: {k: v[3] for k, v in m.items() if v[3]} for gw, m in raw.items()}
+    # per gameweek: (xG, xA, defensive actions, starts)
+    d["live_under"] = {gw: {k: v[4] for k, v in m.items() if v[1]} for gw, m in raw.items()}
 
     # full per-player match stats for the latest gameweek, tagged with the fixture(s) each player played in
     try:
@@ -2969,10 +2984,20 @@ matches. Data from the FPL Draft and FPL APIs. Photos and badges from the Premie
 
 
 def main():
-    try:
-        d = load_data()
-    except requests.RequestException as err:
-        sys.exit(f"Could not reach the FPL API: {err}")
+    snap_in, snap_out = os.environ.get("SNAPSHOT_IN"), os.environ.get("SNAPSHOT_OUT")
+    if snap_in:  # development: rebuild from a saved copy of the API data instead of fetching it
+        import gzip, pickle
+        with gzip.open(snap_in, "rb") as f:
+            d = pickle.load(f)
+    else:
+        try:
+            d = load_data()
+        except requests.RequestException as err:
+            sys.exit(f"Could not reach the FPL API: {err}")
+    if snap_out:
+        import gzip, pickle
+        with gzip.open(snap_out, "wb") as f:
+            pickle.dump(d, f)
     teams, _, _ = build_teams(d)
     players = build_players(d, teams)
     rank_and_tag(players, [pk["element"] for pk in d["picks"]])
