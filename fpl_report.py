@@ -2164,30 +2164,56 @@ def benchmark_section(d, players, squad):
             out.append((gw, v, avg, played))
         return out
 
+    # two rows per player: every game he played, then his last 3 played, both against the league average
+    def gap_cell(v, bm):
+        if v is None:
+            return '<td class="mut">-</td>'
+        g = round(v - bm, 1) + 0.0
+        return f'<td><span class="bignum {"pos" if g > 0 else "neg" if g < 0 else "mut"}">{g:+.1f}</span></td>'
+
+    TREND = {"up": ("Increasing", "tr-up", "↑"), "flat": ("Maintaining", "tr-flat", "→"), "down": ("Decreasing", "tr-down", "↓")}
     rows = []
     for p in squad:
         wk = per_week(p)
-        total = sum(v for _, v, _, _ in wk)
-        avg_pp = total / len(wk) if wk else 0
         bm = pooled[p["pos"]]
-        above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
-        pl = [v for _, v, _, played in wk if played]
-        avg_pl = sum(pl) / len(pl) if pl else None
-        rows.append(dict(p=p, wk=wk, avg=avg_pp, bm=bm, gap=round(avg_pp - bm, 1) + 0.0, above=above, mine=True,
-                         avg_pl=avg_pl, n_pl=len(pl),
-                         gap_pl=(round(avg_pl - bm, 1) + 0.0) if avg_pl is not None else None))
-    rows.sort(key=lambda r: -r["gap"])
-    cols = [("Player", lambda r: who(r["p"])),
-            ("Each gameweek", lambda r: '<div class="dchips">' + "".join(
-                f'<div class="dcol"><small>GW{gw}</small>{diff_chip(v if pl else None, a, f"GW{gw}")}</div>' for gw, v, a, pl in r["wk"]) + "</div>"),
-            ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
-            ("League avg", lambda r: f'<span class="mut">{r["bm"]:.1f}</span><span class="sub2">{r["p"]["pos"]}</span>'),
-            ("Gap", lambda r: f'<span class="bignum {"pos" if r["gap"] > 0 else "neg" if r["gap"] < 0 else "mut"}">{r["gap"]:+.1f}</span>'),
-            ("When he played", lambda r: "-" if r["avg_pl"] is None else
-                f'{r["avg_pl"]:.1f} <b class="{"pos" if r["gap_pl"] > 0 else "neg" if r["gap_pl"] < 0 else "mut"}">'
-                f'{r["gap_pl"]:+.1f}</b><span class="sub2">in {r["n_pl"]} of {len(r["wk"])} games</span>'),
-            ("Weeks above", lambda r: f'{r["above"]}/{len(r["wk"])}')]
-    table2 = table(rows, cols, False)
+        pl = [(gw, v, a) for gw, v, a, played in wk if played]
+        avg_pl = sum(v for _, v, _ in pl) / len(pl) if pl else None
+        l3 = pl[-3:]
+        avg3 = sum(v for _, v, _ in l3) / len(l3) if l3 else None
+        above = sum(1 for _, v, a in pl if a is not None and v > a)
+        trend = None
+        if avg_pl is not None and len(pl) > 3:
+            dl = avg3 - avg_pl
+            trend = "up" if dl >= 1 else "down" if dl <= -1 else "flat"
+        rows.append(dict(p=p, wk=wk, bm=bm, avg_pl=avg_pl, n_pl=len(pl), above=above, avg3=avg3, l3=l3, trend=trend))
+    rows.sort(key=lambda r: -(r["avg_pl"] - r["bm"]) if r["avg_pl"] is not None else 99)
+
+    body2 = ""
+    for r in rows:
+        p = r["p"]
+        t = TREND.get(r["trend"])
+        trend_html = (f'<span class="trend {t[1]}">{t[2]} {t[0]}</span>' if t else
+                      '<span class="trend tr-na">Too few games</span>' if r["n_pl"] else "")
+        chips = '<div class="dchips">' + "".join(
+            f'<div class="dcol"><small>GW{gw}</small>{diff_chip(v if pl_ else None, a, f"GW{gw}")}</div>'
+            for gw, v, a, pl_ in r["wk"]) + "</div>"
+        l3_gws = ", ".join(f"GW{gw}" for gw, _, _ in r["l3"])
+        avg_txt = "-" if r["avg_pl"] is None else f"{r['avg_pl']:.1f}"
+        l3_txt = "-" if r["avg3"] is None else f"{r['avg3']:.1f}"
+        body2 += (f'<tr class="pv1{" mine" if p["mine"] else ""}"><td rowspan="2">{who(p)}<div style="margin-top:6px">{trend_html}</div></td>'
+                  f'<td class="per">All games played</td>'
+                  f'<td>{big(avg_txt)}</td>'
+                  f'<td><span class="mut">{r["bm"]:.1f}</span><span class="sub2">{p["pos"]}</span></td>'
+                  f'{gap_cell(r["avg_pl"], r["bm"])}'
+                  f'<td>{r["n_pl"]} of {len(r["wk"])}<span class="sub2">above avg in {r["above"]}</span></td>'
+                  f'<td rowspan="2">{chips}</td></tr>'
+                  f'<tr class="pv2"><td class="per">Last 3 played</td>'
+                  f'<td>{big(l3_txt)}</td>'
+                  f'<td><span class="mut">{r["bm"]:.1f}</span></td>'
+                  f'{gap_cell(r["avg3"], r["bm"])}'
+                  f'<td><span class="sub2">{l3_gws or "-"}</span></td></tr>')
+    table2 = (f'<div class="tw"><table class="pvt"><thead><tr><th>Player</th><th></th><th>Avg pts</th><th>League avg</th>'
+              f'<th>Gap</th><th>Games</th><th>Each gameweek</th></tr></thead><tbody>{body2}</tbody></table></div>')
 
     # 3) free agents who beat the benchmark for their position
     fa_rows = []
@@ -2219,7 +2245,9 @@ def benchmark_section(d, players, squad):
                         '<p class="empty">No free agents with enough minutes to compare.</p>')
             continue
         fcols = [("Player", lambda r: who(r["p"])),
-                 ("Each gameweek", cols[1][1]),
+                 ("Each gameweek", lambda r: '<div class="dchips">' + "".join(
+                     f'<div class="dcol"><small>GW{gw}</small>{diff_chip(v if pl else None, a, f"GW{gw}")}</div>'
+                     for gw, v, a, pl in r["wk"]) + "</div>"),
                  ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
                  ("Last 3 GWs", lambda r: f'{r["l3"]:.1f}<span class="sub2">{"rising" if r["l3"] > r["avg"] + 1 else "falling" if r["l3"] < r["avg"] - 1 else "steady"}</span>'),
                  ("Gap", lambda r: f'<span class="bignum {"pos" if r["gap"] > 0 else "neg" if r["gap"] < 0 else "mut"}">{r["gap"]:+.1f}</span>'),
@@ -2237,9 +2265,11 @@ week. <b class="pos">Green</b> = you got more per player than the league, <b cla
 counts how many weeks you came out ahead, which shows where you're stronger than your competition and where you're weaker.</p>
 {table1}</div>
 <div class="card"><h3>Your players vs the average at their position</h3>
-<p class="note">Every gameweek this season, including weeks before you owned him or when he was on your bench, so you're
-judging the player, not your lineup choices. A dash means he didn't feature. "When he played" only counts games
-he was on the pitch, which is the fairer read for anyone who's been injured. Sorted best to worst.</p>
+<p class="note">Each player has two rows. The top row is his average across every game he's played this season (including
+weeks before you owned him or when he was on your bench), against what a counted player at his position scores for the rest
+of Hope Bros. The second row is the same for his last 3 games played. The trend compares the two: <b>Increasing</b> or
+<b>Decreasing</b> when his last 3 are at least a point a game above or below his season average, otherwise <b>Maintaining</b>.
+A dash in the gameweek boxes means he didn't play. Sorted best to worst on the season row.</p>
 {table2}</div>
 <div class="card"><h3>Free agents beating the average</h3>
 <p class="note">Unowned players whose average per gameweek is higher than what your opponents' players at that position average.</p>
@@ -2534,6 +2564,12 @@ MOVES_CSS = """
 .role{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:0 6px;background:#efe9ff;color:#6d28d9;margin-left:4px}
 .keepers{font-size:14px;color:var(--muted)}.keepers b{color:var(--ink)}
 .mv-none{color:var(--muted);font-size:14px;padding:12px 0}
+.pvt tr.pv1 td{border-bottom:0;padding-bottom:4px}.pvt tr.pv2 td{padding-top:4px;border-bottom:2px solid var(--line)}
+.pvt tr.pv2 td{background:#fafbfd}.pvt tr.pv1.mine td{background:none}
+.pvt td.per{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
+.tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
+.tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
 @media (max-width:700px){.opt{grid-template-columns:1fr}.opt-acts{flex-direction:row}.mv-me,.mv-opts{padding-left:16px;padding-right:16px}}
 """
 
