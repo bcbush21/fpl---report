@@ -2215,21 +2215,23 @@ def benchmark_section(d, players, squad):
     table2 = (f'<div class="tw"><table class="pvt"><thead><tr><th>Player</th><th></th><th>Avg pts</th><th>League avg</th>'
               f'<th>Gap</th><th>Games</th><th>Each gameweek</th></tr></thead><tbody>{body2}</tbody></table></div>')
 
-    # 3) free agents who beat the benchmark for their position
+    # 3) free agents who beat the benchmark for their position, judged only on their team's last 3 gameweeks
+    #    (a missed game counts as 0, the same as Drop & get, so a free agent has to be playing to show up)
     fa_rows = []
     for p in players.values():
-        if p["owner"] or p["status"] not in ("a", "d") or p["mins"] < 180:
+        a = p.get("as")
+        if p["owner"] or p["status"] not in ("a", "d") or not a or not a["k"] or not sum(r["mins"] for r in a["rows"]):
             continue
-        wk = per_week(p)
-        if not wk:
-            continue
-        avg_pp = sum(v for _, v, _, _ in wk) / len(wk)
-        last3 = [v for _, v, _, _ in wk[-3:]]
-        l3 = sum(last3) / len(last3) if last3 else 0
         bm = pooled[p["pos"]]
-        above = sum(1 for _, v, a, _ in wk if a is not None and v > a)
-        fa_rows.append(dict(p=p, wk=wk, avg=avg_pp, l3=l3, bm=bm, gap=round(avg_pp - bm, 1) + 0.0, above=above))
-    fa_rows.sort(key=lambda r: -r["gap"])
+        fa_rows.append(dict(p=p, a=a, l3=a["avg3"], bm=bm, gap=round(a["avg3"] - bm, 1) + 0.0,
+                            above=sum(1 for r in a["rows"] if r["pts"] > bm)))
+    fa_rows.sort(key=lambda r: (-r["gap"], -r["a"]["avg_min"]))
+
+    def last3_chips(r):
+        return '<div class="dchips">' + "".join(
+            f'<div class="dcol"><small>GW{x["gw"]}</small>{diff_chip(x["pts"] if x["mins"] else None, r["bm"], "GW" + str(x["gw"]))}'
+            f'<small>{x["mins"]}\'</small></div>' for x in r["a"]["rows"]) + "</div>"
+
     fa_html = ""
     for pos, label in (("GK", "Goalkeepers"), ("DEF", "Defenders"), ("MID", "Midfielders"), ("FWD", "Forwards")):
         everyone = [r for r in fa_rows if r["p"]["pos"] == pos]
@@ -2238,21 +2240,18 @@ def benchmark_section(d, players, squad):
         if not rs:
             # nobody beats the bar: say so and show the closest options instead of hiding the position
             rs = everyone[:4]
-            note = ('<p class="note">No free agent at this position is beating the league average right now. '
-                    'These are the closest options.</p>')
+            note = ('<p class="note">No free agent at this position is beating the league average over his last 3 '
+                    'right now. These are the closest options.</p>')
         if not rs:
             fa_html += (f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>'
-                        '<p class="empty">No free agents with enough minutes to compare.</p>')
+                        '<p class="empty">No free agents with recent minutes to compare.</p>')
             continue
         fcols = [("Player", lambda r: who(r["p"])),
-                 ("Each gameweek", lambda r: '<div class="dchips">' + "".join(
-                     f'<div class="dcol"><small>GW{gw}</small>{diff_chip(v if pl else None, a, f"GW{gw}")}</div>'
-                     for gw, v, a, pl in r["wk"]) + "</div>"),
-                 ("Avg per GW", lambda r: big(f"{r['avg']:.1f}")),
-                 ("Last 3 GWs", lambda r: f'{r["l3"]:.1f}<span class="sub2">{"rising" if r["l3"] > r["avg"] + 1 else "falling" if r["l3"] < r["avg"] - 1 else "steady"}</span>'),
+                 ("Last 3 gameweeks", last3_chips),
+                 ("Last 3 avg", lambda r: big(f"{r['l3']:.1f}")),
                  ("Gap", lambda r: f'<span class="bignum {"pos" if r["gap"] > 0 else "neg" if r["gap"] < 0 else "mut"}">{r["gap"]:+.1f}</span>'),
-                 ("Weeks above", lambda r: f'{r["above"]}/{len(r["wk"])}'),
-                 (f"Next {HORIZON}", lambda r: pill(next5(r["p"], TEAMS)[0]))]
+                 ("Minutes", lambda r: f'{r["a"]["avg_min"]}\'<span class="sub2">a game, started {r["a"]["starts3"]} of {r["a"]["games3"]}</span>'),
+                 (f"Next {HORIZON}", lambda r: f'<span class="pill f-{r["a"]["stretch_l"]}">{r["a"]["stretch_l"]}</span>')]
         fa_html += f'<h4>{label} <span class="mut">(league avg {pooled[pos]:.1f})</span></h4>{note}{table(rs, fcols, False)}'
 
     return f"""<section id="vsleague"><h2>Me vs the league</h2>
@@ -2272,7 +2271,9 @@ of Hope Bros. The second row is the same for his last 3 games played. The trend 
 A dash in the gameweek boxes means he didn't play. Sorted best to worst on the season row.</p>
 {table2}</div>
 <div class="card"><h3>Free agents beating the average</h3>
-<p class="note">Unowned players whose average per gameweek is higher than what your opponents' players at that position average.</p>
+<p class="note">Unowned players whose average over their team's last 3 gameweeks beats what your opponents' players at that
+position average. Only those 3 games count; a game he missed counts as 0. Small numbers under each box are his minutes.
+Next 5 is rated for how he scores, the same as Drop &amp; get.</p>
 {fa_html or '<p class="empty">No free agents are beating the league average right now.</p>'}</div>
 </section>"""
 
