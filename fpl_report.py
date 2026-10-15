@@ -23,8 +23,6 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-import other_comps
-
 ENTRY_ID = 275109  # your team ID
 HORIZON = 5        # how many upcoming gameweeks to look at
 
@@ -44,10 +42,6 @@ HOME_BOOST = 1.12  # home teams create ~12% more xG on average
 # Players the report should never tell you to drop or trade, whatever the numbers say.
 # Use the name exactly as FPL shows it, e.g. "Palmer", "Cunha". Edit on GitHub any time.
 KEEP = []
-
-# Extra players to follow in the "Cup & Europe" tab, on top of your squad and the best free agents.
-# Use the name exactly as FPL shows it, e.g. ["McGinn", "N.Jackson"]. Edit on GitHub any time.
-WATCHLIST = []
 
 # How much of a player's over/underperformance vs xG counts as real finishing skill.
 # 0 = pure xG (ignores finishing), 1 = pure actual returns. 0.3 is a sensible middle.
@@ -1444,7 +1438,6 @@ def squad_review_section(squad, players, teams, d=None):
 <div class="rv-lbl">Next {HORIZON} games {pill(n5_label)}</div>
 <p class="note" style="margin:-8px 0 0;font-size:12px">{n5_what}</p>
 {n5_chips}
-{oc_block(p)}
 {f'<ul class="rv-notes">{notes}</ul>' if notes else ''}{alt}</div>''')
     return f"""<section id="squad"><h2>My squad</h2>
 <p class="note">Every player on your team: what he's scored each gameweek since the start of the season, how reliable his
@@ -2285,150 +2278,6 @@ Next 5 is rated for how he scores, the same as Drop &amp; get.</p>
 </section>"""
 
 
-# ---------------------------------------------------------------- cup and European games
-
-def season_year(d):
-    evs = d["boot"].get("events")
-    evs = evs.get("data") if isinstance(evs, dict) else evs
-    first = min((e.get("deadline_time") for e in (evs or []) if e.get("deadline_time")), default=None)
-    if first:
-        return int(first[:4])
-    now = datetime.date.today()
-    return now.year if now.month >= 7 else now.year - 1
-
-
-def watch_ids(players):
-    """Your squad, the best free agents at each position (passing both tests), and WATCHLIST names."""
-    ids = {p["id"] for p in players.values() if p["mine"]}
-    for pos in POS.values():
-        fa = [p for p in players.values() if p["pos"] == pos and not p["owner"] and p.get("as", {}).get("passes")]
-        fa.sort(key=lambda p: (p["as"]["stretch"] >= 1.04, p["as"]["avg3"], p["as"]["stretch"]), reverse=True)
-        ids |= {p["id"] for p in fa[:3]}
-    want = {w.lower() for w in WATCHLIST}
-    ids |= {p["id"] for p in players.values() if p["name"].lower() in want}
-    return ids
-
-
-def add_other_comps(d, players, teams):
-    """Cup and European games from API-Football, attached to each player as p['oc']."""
-    try:
-        cache, status = other_comps.fetch(teams, season_year(d))
-        per_player, clubs = other_comps.build(cache, d, players, teams)
-    except Exception as err:  # never let the extra source break the morning report
-        print(f"Other competitions skipped: {err}")
-        cache, status, per_player, clubs = {}, f"error: {err}", {}, {}
-    d["oc_status"], d["oc_clubs"], d["oc_cache"] = status, clubs, cache
-    d["oc_watch"] = watch_ids(players)
-    for p in players.values():
-        p["oc"] = per_player.get(p["id"])
-
-
-def oc_game_chip(g):
-    t = other_comps._ts(g["t"])
-    when = f"{t:%b} {t.day}" if t else ""
-    if g["m"] <= 0:
-        cls, mins = "none", "Unused" if g["sub"] else "Not used"
-    else:
-        cls, mins = ("full" if g["m"] >= 75 else "part"), f"{g['m']}'" + (" sub" if g["sub"] else "")
-    ga = (f" · {g['g']}G" if g["g"] else "") + (f" {g['a']}A" if g["a"] else "")
-    rt = f" · {float(g['r']):.1f}" if g.get("r") and g["m"] > 0 else ""
-    title = f"{g['comp']} {when} vs {g['opp']} ({'home' if g['home'] else 'away'}): {mins}{ga}{rt}"
-    return (f'<span class="ocg {cls}" title="{esc(title)}"><b>{esc(g["comp"])}</b>'
-            f'<small>{esc(when)} · {esc(g["opp"])}</small><i>{esc(mins)}{esc(ga)}{esc(rt)}</i></span>')
-
-
-def oc_flags(o):
-    return "".join(f'<span class="ocf {k}">{esc(t)}</span>' for t, k in o["flags"])
-
-
-def oc_block(p):
-    """Cup & Europe lines on a My squad card."""
-    o = p.get("oc")
-    if not o or not (o["games"] or o["flags"]):
-        return ""
-    return (f'<div class="rv-lbl">Cup &amp; Europe</div><div class="ocgs">{"".join(oc_game_chip(g) for g in o["games"][-4:])}</div>'
-            f'<div class="ocfs">{oc_flags(o)}</div>')
-
-
-def oc_data(p):
-    o = p.get("oc")
-    if not o or not (o["games"] or o["flags"]):
-        return None
-    return dict(f=o["flags"], g=[[g["comp"], g["t"][:10], g["m"], 1 if g["sub"] else 0, g["g"], g["a"], g["opp"]]
-                                 for g in o["games"][-4:]])
-
-
-def cups_section(d, players, teams):
-    status = d.get("oc_status", "nokey")
-    head = """<section id="cups"><h2>Cup and European games</h2>
-<p class="note">Minutes your players and watch list play outside the league: Champions League, Europa League, Conference League,
-FA Cup and League Cup. Three things to look for. <b>Rotation:</b> a full 90 midweek a few days before a league game makes a
-rest more likely, especially for clubs playing twice a week. <b>Pecking order:</b> managers rest their first choices in the
-domestic cups, so a league starter left out is a good sign, and a fringe player starting the cup is usually the backup.
-<b>Fitness:</b> real minutes in a cup game after an injury mean he's ready for the league. Goals in these games don't count
-toward your tests; they're context only.</p>"""
-    if status == "nokey":
-        return head + """<div class="card"><h3>Switch this on</h3><p class="note" style="margin:0">This tab needs a free
-API-Football key. Sign up at dashboard.api-football.com (free plan), then on GitHub open the repo's Settings → Secrets and
-variables → Actions → New repository secret, name it <b>API_FOOTBALL_KEY</b> and paste the key. The next morning's build will
-fill this in.</p></div></section>"""
-    note = ""
-    if status.startswith("error"):
-        note = (f'<p class="note"><b class="neg">API-Football problem:</b> {esc(status[7:])}. '
-                'Showing what was saved from earlier runs.</p>')
-    elif status == "budget":
-        note = '<p class="note">Hit the daily request limit; the rest fills in on tomorrow\'s build.</p>'
-    clubs = d.get("oc_clubs", {})
-    watch = d.get("oc_watch", set())
-    in_scope = sorted({players[i]["tid"] for i in watch if i in players},
-                      key=lambda t: (-clubs.get(t, {}).get("n14", 0), teams[t]["name"]))
-    rows = ""
-    for tid in in_scope:
-        c = clubs.get(tid) or {}
-        t = teams[tid]
-        nxt = c.get("next_pl")
-        sched = []
-        for f in c.get("before", []) + c.get("after", []):
-            ft = other_comps._ts(f["t"])
-            if ft:
-                sched.append(f'{other_comps.comp_short(f)} {ft:%a %b} {ft.day}')
-        rest = c.get("rest")
-        busy = c.get("n14", 0) >= 5 or (rest is not None and rest <= 3)
-        rest_txt = "-" if rest is None else f'<b class="{"neg" if busy else "pos"}">{rest} days</b>'
-        rows += (f'<tr><td><div class="who">{badge(tid, 22)}<b>{esc(t["full"])}</b></div></td>'
-                 f'<td><b>{c.get("n14", 0)}</b><span class="sub2">all competitions</span></td>'
-                 f'<td>{", ".join(esc(x) for x in sched) or "<span class=mut>None</span>"}</td>'
-                 f'<td>{"-" if not nxt else f"{nxt:%a %b} {nxt.day}"}</td>'
-                 f'<td>{rest_txt}</td></tr>')
-    clubs_html = (f'<div class="card"><h3>Your clubs this week</h3><p class="note">Games in the last 14 days, cup and European '
-                  f'games around GW{d["next"]}, and the rest before the league game. Red = a tight turnaround (3 days or fewer) '
-                  f'or 5+ games in 14 days.</p><div class="tw"><table><thead><tr><th>Club</th><th>Last 14 days</th>'
-                  f'<th>Cup &amp; Europe around GW{d["next"]}</th><th>GW{d["next"]} game</th><th>Rest before it</th></tr></thead>'
-                  f'<tbody>{rows}</tbody></table></div></div>')
-
-    def plist(ps, title, empty):
-        body = ""
-        for p in ps:
-            o = p.get("oc") or {"games": [], "flags": [], "n14": 0, "s14": 0, "m14": 0}
-            games = "".join(oc_game_chip(g) for g in o["games"]) or '<span class="mut">No cup or European games in the last 3 weeks</span>'
-            outside = (f'{plural(o["n14"], "game")} · {plural(o["s14"], "start")} · {o["m14"]}\'<span class="sub2">last 14 days</span>'
-                       if o["n14"] else '<span class="mut">-</span>')
-            body += (f'<tr><td>{who(p)}</td><td><div class="ocgs">{games}</div></td><td>{outside}</td>'
-                     f'<td><div class="ocfs">{oc_flags(o) or "<span class=mut>-</span>"}</div></td></tr>')
-        if not body:
-            return f'<div class="card"><h3>{title}</h3><p class="empty">{empty}</p></div>'
-        return (f'<div class="card"><h3>{title}</h3><div class="tw"><table class="oct"><thead><tr><th>Player</th>'
-                f'<th>Cup &amp; European games</th><th>Outside the league</th><th>What it means</th></tr></thead>'
-                f'<tbody>{body}</tbody></table></div></div>')
-
-    order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
-    mine = sorted((p for p in players.values() if p["mine"]), key=lambda p: (order[p["pos"]], -len((p.get("oc") or {}).get("flags", []))))
-    others = sorted((players[i] for i in watch if i in players and not players[i]["mine"]),
-                    key=lambda p: (order[p["pos"]], p["name"]))
-    return (head + note + clubs_html + plist(mine, "Your players", "No players.")
-            + plist(others, "Watch list: best free agents and WATCHLIST names", "Nothing on the watch list yet.") + "</section>")
-
-
 # ---------------------------------------------------------------- who to drop, who to get
 #
 # Ben's rules, using only things that have actually happened (no projected points):
@@ -2647,7 +2496,7 @@ def compare_data(d, players, teams):
             r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
-            mv=moves_data(p), fv=finishing_verdict(p), oc=oc_data(p)))
+            mv=moves_data(p), fv=finishing_verdict(p)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
@@ -2719,16 +2568,6 @@ MOVES_CSS = """
 .pvt tr.pv1 td{border-bottom:0;padding-bottom:4px}.pvt tr.pv2 td{padding-top:4px;border-bottom:2px solid var(--line)}
 .pvt tr.pv2 td{background:#fafbfd}.pvt tr.pv1.mine td{background:none}
 .pvt td.per{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
-.ocgs{display:flex;flex-wrap:wrap;gap:6px}
-.ocg{display:inline-flex;flex-direction:column;min-width:96px;border-radius:10px;padding:5px 9px;background:#eef1f6;line-height:1.3}
-.ocg b{font-size:12px}.ocg small{font-size:11px;color:var(--muted)}.ocg i{font-style:normal;font-size:12px;font-weight:700}
-.ocg.full{background:var(--green-soft)}.ocg.full i{color:var(--green)}.ocg.part{background:var(--amber-soft)}.ocg.part i{color:var(--amber)}
-.ocg.none i{color:var(--muted)}
-.ocfs{display:flex;flex-direction:column;gap:4px;margin-top:6px}
-.ocf{display:inline-block;font-size:13px;font-weight:600;border-radius:8px;padding:3px 9px;white-space:normal}
-.ocf.warn{background:var(--amber-soft);color:var(--amber)}.ocf.good{background:var(--green-soft);color:var(--green)}
-.ocf.info{background:var(--blue-soft);color:var(--navy)}
-.oct td{white-space:normal;vertical-align:top}.oct td:first-child{white-space:nowrap}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -2842,12 +2681,6 @@ function finLine(p){
   const d = (p.g + p.a) - (p.xg + p.xa);
   return `<span>${p.g}G ${p.a}A from ${p.xg.toFixed(1)} xG + ${p.xa.toFixed(1)} xA (${d >= 0 ? '+' : ''}${d.toFixed(1)}) · <b class="${FVC[p.fv] || ''}">${esc(p.fv)}</b></span>`;
 }
-function ocLine(p){
-  if (!p.oc) return '';
-  const gs = p.oc.g.map(([c, d, m, sub, g, a]) => `${esc(c)} ${d.slice(5).replace('-', '/')}: ${m ? m + "'" + (sub ? ' sub' : '') : 'unused'}${g ? ' ' + g + 'G' : ''}${a ? ' ' + a + 'A' : ''}`).join(' · ');
-  const fl = p.oc.f.map(([t, k]) => `<span class="ocf ${k}">${esc(t)}</span>`).join('');
-  return `<div class="bd-l"><span><b>Cup &amp; Europe:</b> ${gs || 'no games'}</span></div>${fl ? `<div class="ocfs">${fl}</div>` : ''}`;
-}
 const roleTxt = p => { const m = mv(p); return m.ro === 'overlooked' ? 'Overlooked on a strong team' :
   m.ro === 'focal' ? `Focal point: ${Math.round(m.sh * 100)}% of ${esc(p.t)}'s chances` : ''; };
 
@@ -2877,7 +2710,7 @@ function optRow({p, t}, me, trade){
   return `<div class="opt"><div class="who">${photo(p, 42)}<div><div class="nm">${esc(p.n)}${m.ro ? `<span class="role">${m.ro === 'focal' ? 'Focal point' : 'Overlooked'}</span>` : ''}</div>
       <div class="tm">${badge(p.tid, 14)}${esc(p.t)} · ${trade ? 'Owned by ' + esc(p.own) : 'Free agent'}</div>
       <div class="tm"><b style="color:var(--ink)">${f1(m.a3)}</b>&nbsp;pts a week · ${m.mm}' a game</div></div></div>
-    <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${ocLine(p)}${vsLine(p, me)}</div>
+    <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
     <div class="opt-acts"><button class="sb plan-get ${planned ? 'planned' : ''}" data-id="${p.id}">${planned ? '✓ Planning to get' : 'Plan to get'}</button>
       <button class="sb cmp-add" data-id="${p.id}">+ Compare</button></div></div>`;
 }
@@ -2918,8 +2751,7 @@ function card({p, why}){
     <div class="mv-facts"><div><div class="mv-k">Last 3: where his points came from</div>${breakdown(p, 0)}</div>
       <div><div class="mv-k">Minutes</div>${minutes(p)}</div>
       <div><div class="mv-k">Next 5</div>${fixtures(p)}<div class="bd-l">${fixNote(p)}</div></div>
-      <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div>
-      ${p.oc ? `<div><div class="mv-k">Cup &amp; Europe</div>${ocLine(p)}</div>` : ''}</div></div>
+      <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div></div></div>
     <div class="mv-opts"><h4>Free agents who pass both tests</h4>${fa.length ? fa.map(x => optRow(x, p, false)).join('') :
       `<p class="mv-none">No free-agent ${POSW[p.pos]}s pass both tests right now.</p>`}
     ${tr.length ? `<h4>Better, but owned: trade targets</h4>${tr.map(x => optRow(x, p, true)).join('')}` : ''}</div></div>`;
@@ -3662,7 +3494,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#cups">Cup &amp; Europe</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -3677,8 +3509,6 @@ def render(d, players, teams, log=None):
 {teams_section(d, teams, players, log)}
 
 {compare_section(d, players, teams)}
-
-{cups_section(d, players, teams)}
 
 {predictions_section(log, players) if log is not None else ""}
 
@@ -3708,7 +3538,6 @@ def main():
     TEAMS.clear()
     TEAMS.update(teams)
     assess(d, players, teams)
-    add_other_comps(d, players, teams)
     log = update_predictions(d, teams, players)
     out = Path(os.environ.get("REPORT_PATH") or Path(__file__).with_name("fpl_report.html"))
     out.parent.mkdir(parents=True, exist_ok=True)

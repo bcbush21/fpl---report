@@ -29,13 +29,11 @@ jobs:
         env:
           REPORT_PATH: site/index.html
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-      - name: Save predictions log and cup/Europe cache
+      - name: Save predictions log
         run: |
           git config user.name "fpl-report-bot"
           git config user.email "fpl-report-bot@users.noreply.github.com"
           git add predictions.json
-          if [ -f other_comps.json ]; then git add other_comps.json; fi
           if ! git diff --cached --quiet; then
             git commit -m "Update predictions log"
             git pull --rebase origin main && git push origin HEAD:main
