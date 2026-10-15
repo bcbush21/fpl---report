@@ -38,6 +38,7 @@ jobs:
           git config user.name "fpl-report-bot"
           git config user.email "fpl-report-bot@users.noreply.github.com"
           git add predictions.json
+          if [ -f elite.json ]; then git add elite.json; fi
           if ! git diff --cached --quiet; then
             git commit -m "Update predictions log"
             git pull --rebase origin main && git push origin HEAD:main

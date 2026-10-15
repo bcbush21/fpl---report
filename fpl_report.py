@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+import elite
+
 ENTRY_ID = 275109  # your team ID
 HORIZON = 5        # how many upcoming gameweeks to look at
 
@@ -2935,6 +2937,115 @@ draw();
 """
 
 
+# ---------------------------------------------------------------- what the top 1,000 own
+
+def add_elite(d, players):
+    """Top-1,000 ownership for every player, from elite.json (fetched once per gameweek)."""
+    try:
+        cache = elite.fetch(d.get("classic_boot"))
+        by_code, meta = elite.summary(cache, d.get("classic_boot"))
+    except Exception as err:  # never let the extra source break the morning report
+        print(f"Top managers skipped: {err}")
+        by_code, meta = {}, None
+    d["elite_meta"] = meta
+    for p in players.values():
+        p["el"] = by_code.get(str(p.get("code"))) if meta else None
+
+
+def elite_section(d, players):
+    meta = d.get("elite_meta")
+    head = """<section id="elite"><h2>What the top 1,000 own</h2>
+<p class="note">Squads of the 1,000 highest-ranked managers in the main FPL game, checked once per gameweek after the deadline.
+<b>Top 1,000</b> is the share of them who own the player; <b>change</b> is how that moved since the previous gameweek for the same
+managers, which is where you spot them piling in. <b>Everyone</b> is ownership across all FPL managers, and <b>edge</b> is the gap:
+players the best managers rate well ahead of the crowd. These are budget-game squads (a £100m budget, and anyone can own anyone),
+so treat it as a read on who they rate, not a Draft ranking. Managers using a Free Hit that week are left out.</p>"""
+    if not meta:
+        return head + '<div class="card"><p class="empty">Top-manager data isn\'t available yet; it fills in on the next build.</p></div></section>'
+    rows = []
+    for p in players.values():
+        e = p.get("el")
+        if not e or (e["own"] == 0 and not e["chg"]):
+            continue
+        a = p.get("as") or {}
+        rows.append([p["id"], p["name"], p["team"], p["tid"], p["pos"], "You" if p["mine"] else (p["owner"] or ""),
+                     e["own"], e["chg"], e["cap"], e["all"], round(a.get("avg3", 0), 1), p.get("code"),
+                     1 if a.get("passes") else 0])
+    data = json.dumps(dict(rows=rows, photo=PHOTO, badge=BADGE, codes={tid: t["code"] for tid, t in TEAMS.items()},
+                           has_prev=meta["has_prev"]), separators=(",", ":")).replace("</", "<\\/")
+    when = other = ""
+    if meta.get("at"):
+        t = parse_ts(meta["at"])
+        when = f" Checked {t:%b} {t.day}." if t else ""
+    if meta.get("partial"):
+        other = " Some squads couldn't be loaded this time, so the numbers may be a little off; it retries next build."
+    stats = (f'<div class="ws"><div><span class="k">Gameweek</span><span class="v">{meta["gw"]}</span></div>'
+             f'<div><span class="k">Squads counted</span><span class="v">{meta["n"]:,}</span></div>'
+             f'<div><span class="k">Points to make the top 1,000</span><span class="v">{meta["cutoff"] or "-"}</span>'
+             f'<span class="k2">leader on {meta["top"] or "-"}</span></div></div>'
+             f'<p class="note" style="margin:10px 0 0">{when}{other}</p>')
+    return head + f"""<div class="card">{stats}</div>
+<div class="card" id="el-risers"></div>
+<div class="card cmp-tools"><div class="cmp-row">
+<input id="el-q" type="search" placeholder="Search a player or club" autocomplete="off">
+<select id="el-who"><option value="fa">Available (free agents)</option><option value="all">All players</option><option value="mine">My players</option><option value="other">Owned by others</option></select>
+<select id="el-pos"><option value="">All positions</option><option>GK</option><option>DEF</option><option>MID</option><option>FWD</option></select>
+<select id="el-sort"><option value="own">Most owned by the top 1,000</option><option value="up">Biggest risers this week</option>
+<option value="down">Biggest fallers this week</option><option value="edge">Biggest edge over everyone</option><option value="cap">Most captained</option></select></div>
+<p id="el-count" class="note" style="margin:8px 0 0"></p></div>
+<div class="card"><div class="tw"><table class="elt"><thead><tr><th>#</th><th>Player</th><th>Top 1,000</th><th>Change</th>
+<th>Captained</th><th>Everyone</th><th>Edge</th><th>Last 3 a week</th></tr></thead><tbody id="el-body"></tbody></table></div></div>
+<script type="application/json" id="el-data">{data}</script>
+<script>{ELITE_JS}</script></section>"""
+
+
+ELITE_JS = r"""
+(function(){
+const D = JSON.parse(document.getElementById('el-data').textContent);
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').normalize('NFD').replace(/[̀-ͯ]/g, '');
+const ini = n => n.replace(/\./g,' ').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+const photo = (code, n) => `<span class="ph" style="--s:36px"><span class="ini">${esc(ini(n))}</span>${code ? `<img src="${D.photo.replace('{code}', code)}" alt="" onerror="this.remove()">` : ''}</span>`;
+const badge = tid => `<img class="badge" src="${D.badge.replace('{code}', D.codes[tid])}" width="14" height="14" alt="" onerror="this.style.visibility='hidden'">`;
+// [id, name, team, tid, pos, owner, own, chg, cap, all, last3, code, passes]
+const edge = r => r[9] == null ? null : r[6] - r[9];
+const chg = v => v == null ? '<span class="mut">-</span>' : `<b class="${v > 0 ? 'pos' : v < 0 ? 'neg' : 'mut'}">${v > 0 ? '+' : ''}${v.toFixed(1)}</b>`;
+const owner = r => r[5] === 'You' ? '<span class="tag you">You</span>' : r[5] ? `<span class="mut">${esc(r[5])}</span>` : '<span class="tag fa">Free agent</span>';
+function risers(){
+  const box = $('#el-risers');
+  if (!D.has_prev){ box.innerHTML = '<h3>Available players they\'re piling into</h3><p class="empty">Week-on-week changes start next gameweek.</p>'; return; }
+  const rs = D.rows.filter(r => !r[5] && r[7] > 0).sort((a, b) => b[7] - a[7]).slice(0, 6);
+  box.innerHTML = `<h3>Available in Hope Bros, and the top 1,000 are piling in</h3>
+    <p class="note" style="margin:0 0 10px">Free agents in your league with the biggest rise in top-1,000 ownership since last gameweek.</p>
+    <div class="elr">${rs.map(r => `<div class="elc">${photo(r[11], r[1])}<div><b>${esc(r[1])}</b><small>${badge(r[3])}${esc(r[2])} · ${r[4]}</small>
+      <div>${r[6].toFixed(1)}% own ${chg(r[7])}</div></div><button class="cmp-add" data-id="${r[0]}">+ Compare</button></div>`).join('')
+      || '<p class="empty">None this week.</p>'}</div>`;
+}
+function draw(){
+  const q = fold($('#el-q').value.trim()), who = $('#el-who').value, pos = $('#el-pos').value, sort = $('#el-sort').value;
+  let rs = D.rows.filter(r => (!pos || r[4] === pos)
+    && (who === 'all' || (who === 'fa' && !r[5]) || (who === 'mine' && r[5] === 'You') || (who === 'other' && r[5] && r[5] !== 'You'))
+    && (!q || fold(r[1]).includes(q) || fold(r[2]).includes(q)));
+  const by = {own: (a, b) => b[6] - a[6], up: (a, b) => (b[7] || 0) - (a[7] || 0), down: (a, b) => (a[7] || 0) - (b[7] || 0),
+              edge: (a, b) => (edge(b) || -99) - (edge(a) || -99), cap: (a, b) => b[8] - a[8] || b[6] - a[6]}[sort];
+  rs.sort((a, b) => by(a, b) || b[6] - a[6]);
+  $('#el-count').textContent = `${rs.length} player${rs.length === 1 ? '' : 's'}.`;
+  $('#el-body').innerHTML = rs.slice(0, 150).map((r, i) => `<tr class="${r[5] === 'You' ? 'mine' : ''}"><td class="rk">${i + 1}</td>
+    <td><div class="who">${photo(r[11], r[1])}<div><div class="nm">${esc(r[1])} <button class="cmp-add" data-id="${r[0]}">+ Compare</button></div>
+      <div class="tm">${badge(r[3])}${esc(r[2])} · ${r[4]} · ${owner(r)}</div></div></div></td>
+    <td><span class="bignum">${r[6].toFixed(1)}%</span><div class="elbar"><i style="width:${Math.min(100, r[6])}%"></i></div></td>
+    <td>${chg(r[7])}</td><td>${r[8] ? r[8].toFixed(1) + '%' : '<span class="mut">-</span>'}</td>
+    <td>${r[9] == null ? '-' : r[9].toFixed(1) + '%'}</td><td>${edge(r) == null ? '-' : chg(edge(r))}</td>
+    <td>${r[10].toFixed(1)}${r[12] ? ' <span class="tk y" title="Passes both Drop & get tests">✓ tests</span>' : ''}</td></tr>`).join('')
+    || '<tr><td colspan="8" class="empty">No players match.</td></tr>';
+}
+['#el-q', '#el-who', '#el-pos', '#el-sort'].forEach(s => $(s).addEventListener(s === '#el-q' ? 'input' : 'change', draw));
+risers(); draw();
+})();
+"""
+
+
 # ---------------------------------------------------------------- interactive player comparison
 
 def points_by_gw(p, d, fin):
@@ -2983,7 +3094,8 @@ def compare_data(d, players, teams):
             r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
-            mv=moves_data(p), fv=finishing_verdict(p), pb=points_by_gw(p, d, fin)))
+            mv=moves_data(p), fv=finishing_verdict(p), pb=points_by_gw(p, d, fin),
+            el=[p["el"]["own"], p["el"]["chg"], p["el"]["cap"]] if p.get("el") else None))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
@@ -3091,6 +3203,11 @@ MOVES_CSS = """
 .bnh{display:inline-flex;flex-direction:column;align-items:center;border-radius:8px;padding:3px 8px;min-width:64px;line-height:1.25}
 .bnh b{font-size:14px}.bnh small{font-size:10px;color:var(--muted);white-space:nowrap}
 .bnh.b3{background:#fde9b7;color:#8a5a00}.bnh.b2{background:#eef1f6;color:#334155}.bnh.b1{background:#f7ece4;color:#8a4b1f}
+.elt td.rk{color:var(--muted);font-weight:700}
+.elbar{width:90px;height:5px;border-radius:3px;background:#eef1f6;margin-top:4px}.elbar i{display:block;height:100%;border-radius:3px;background:var(--blue)}
+.elr{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.elc{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+.elc>div{flex:1;min-width:0;font-size:14px}.elc small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -3239,6 +3356,11 @@ function finLine(p){
   const d = (p.g + p.a) - (p.xg + p.xa);
   return `<span>${p.g}G ${p.a}A from ${p.xg.toFixed(1)} xG + ${p.xa.toFixed(1)} xA (${d >= 0 ? '+' : ''}${d.toFixed(1)}) · <b class="${FVC[p.fv] || ''}">${esc(p.fv)}</b></span>`;
 }
+function elLine(p){
+  if (!p.el) return '';
+  const [own, chg, cap] = p.el;
+  return `<div class="bd-l"><span><b>Top 1,000:</b> ${own.toFixed(1)}% own${chg == null ? '' : ` <b class="${chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'mut'}">(${chg > 0 ? '+' : ''}${chg.toFixed(1)} this week)</b>`}${cap >= 1 ? ` · ${cap.toFixed(1)}% captain him` : ''}</span></div>`;
+}
 const roleTxt = p => { const m = mv(p); return m.ro === 'overlooked' ? 'Overlooked on a strong team' :
   m.ro === 'focal' ? `Focal point: ${Math.round(m.sh * 100)}% of ${esc(p.t)}'s chances` : ''; };
 
@@ -3268,7 +3390,7 @@ function optRow({p, t}, me, trade){
   return `<div class="opt"><div class="who">${photo(p, 42)}<div><div class="nm">${esc(p.n)}${m.ro ? `<span class="role">${m.ro === 'focal' ? 'Focal point' : 'Overlooked'}</span>` : ''}</div>
       <div class="tm">${badge(p.tid, 14)}${esc(p.t)} · ${trade ? 'Owned by ' + esc(p.own) : 'Free agent'}</div>
       <div class="tm"><b style="color:var(--ink)">${f1(m.a3)}</b>&nbsp;pts a week · ${m.mm}' a game</div></div></div>
-    <div>${tickStrip(t, p)}<div class="pbx" data-id="${p.id}"></div>${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
+    <div>${tickStrip(t, p)}<div class="pbx" data-id="${p.id}"></div>${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${elLine(p)}${vsLine(p, me)}</div>
     <div class="opt-acts"><button class="sb plan-get ${planned ? 'planned' : ''}" data-id="${p.id}">${planned ? '✓ Planning to get' : 'Plan to get'}</button>
       <button class="sb cmp-add" data-id="${p.id}">+ Compare</button>
       <button class="sb watch-add" data-id="${p.id}">Watch</button></div></div>`;
@@ -3310,7 +3432,7 @@ function card({p, why}){
     <div class="mv-facts"><div style="grid-column:1/-1"><div class="mv-k">Points by gameweek, by source</div><div class="pbx" data-id="${p.id}"></div></div>
       <div><div class="mv-k">Minutes</div>${minutes(p)}</div>
       <div><div class="mv-k">Next 5</div>${fixtures(p)}<div class="bd-l">${fixNote(p)}</div></div>
-      <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div></div></div>
+      <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div>${elLine(p)}</div></div></div>
     <div class="mv-opts"><h4>Free agents who pass both tests</h4>${fa.length ? fa.map(x => optRow(x, p, false)).join('') :
       `<p class="mv-none">No free-agent ${POSW[p.pos]}s pass both tests right now.</p>`}
 </div></div>`;
@@ -3352,7 +3474,7 @@ document.addEventListener('click', e => {
   }
   savePlan(); draw(); document.dispatchEvent(new Event('planchange'));
 });
-window.FPLM = {teamFit, ticks, nTicks, rank, options, breakdown, fixtures, minutes, tickStrip, vsLine, mv, renderPB};
+window.FPLM = {teamFit, ticks, nTicks, rank, options, breakdown, fixtures, minutes, tickStrip, vsLine, mv, renderPB, elLine};
 draw();
 })();
 """
@@ -3469,6 +3591,8 @@ const ROWS = [
   ['Points per game', p => p.ppg.toFixed(1) + '<small>per team game</small>', p => p.ppg, (p, b) => [p.ppg - b.ppg, 1, '']],
   ['When he plays', p => p.ppa.toFixed(1) + '<small>per appearance</small>', p => p.ppa, (p, b) => [p.ppa - b.ppa, 1, '']],
   ['vs league avg', p => { const g = p.ppg - p.bm; return `<span class="${g > 0 ? 'pos' : 'neg'}">${g >= 0 ? '+' : ''}${g.toFixed(1)}</span><small>${p.pos} avg ${p.bm.toFixed(1)}</small>`; }, p => p.ppg - p.bm, null],
+  ['Top 1,000 managers', p => p.el ? `<b>${p.el[0].toFixed(1)}%</b> own` + (p.el[1] == null ? '' : `<small class="${p.el[1] > 0 ? 'pos' : p.el[1] < 0 ? 'neg' : 'mut'}">${p.el[1] > 0 ? '+' : ''}${p.el[1].toFixed(1)} this week</small>`) + (p.el[2] >= 1 ? `<small>${p.el[2].toFixed(1)}% captain him</small>` : '') : '<span class="mut">-</span>',
+    p => p.el ? p.el[0] : -1, (p, b) => p.el && b.el ? [p.el[0] - b.el[0], 1, '%'] : null],
   ['xG and xA vs actual', p => finishing(p), null, (p, b) => [(p.g + p.a) - (b.g + b.a), 0, 'G+A']],
   ['Match rating', p => p.r5 == null ? '<span class="mut">-</span>' : (p.r5 >= 0.5 ? 'Top ' + Math.max(1, Math.round((1 - p.r5) * 100)) + '%' : 'Bottom ' + Math.max(1, Math.round(p.r5 * 100)) + '%') + `<small>last ${p.r5n}, vs ${p.pos}</small>`, p => p.r5 == null ? -1 : p.r5, null],
   ['Defensive contribution', p => p.dc == null ? '<span class="mut">-</span>' : Math.round(p.dc * 100) + '%<small>of games hit bonus</small>', p => p.dc == null ? -1 : p.dc, (p, b) => p.dc == null || b.dc == null ? null : [Math.round((p.dc - b.dc) * 100), 0, '%']],
@@ -4066,7 +4190,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#bonus">Bonus</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#bonus">Bonus</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#elite">Top managers</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -4085,6 +4209,8 @@ def render(d, players, teams, log=None):
 {compare_section(d, players, teams)}
 
 {watch_section(d, players)}
+
+{elite_section(d, players)}
 
 {predictions_section(log, players) if log is not None else ""}
 
@@ -4114,6 +4240,7 @@ def main():
     TEAMS.clear()
     TEAMS.update(teams)
     assess(d, players, teams)
+    add_elite(d, players)
     log = update_predictions(d, teams, players)
     out = Path(os.environ.get("REPORT_PATH") or Path(__file__).with_name("fpl_report.html"))
     out.parent.mkdir(parents=True, exist_ok=True)
