@@ -1,3 +1,1 @@
-Top managers GW5: 853 squads, 147 free hits left out, 0 failed
-Top managers GW6: 995 squads, 5 free hits left out, 0 failed
 Report written to dev/index.html
