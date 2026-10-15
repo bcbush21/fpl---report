@@ -741,8 +741,8 @@ if(d===0&&k==='pts')d=(+b.dataset.gd)-(+a.dataset.gd);if(d===0&&k==='pts')d=(+b.
 if(d===0)d=(+b.dataset.pts)-(+a.dataset.pts);if(d===0)d=(+b.dataset.gd)-(+a.dataset.gd);
 if(d===0)d=a.dataset.name.localeCompare(b.dataset.name);return d;}});
 rows.forEach(function(r,i){{r.cells[0].textContent=i+1;tb.appendChild(r);}});}}
-document.querySelectorAll('.sb').forEach(function(b){{b.addEventListener('click',function(){{
-document.querySelectorAll('.sb').forEach(function(x){{x.classList.toggle('on',x===b);}});sort(b.dataset.k,b.dataset.dir);}});}});
+document.querySelectorAll('.sortbar .sb').forEach(function(b){{b.addEventListener('click',function(){{
+document.querySelectorAll('.sortbar .sb').forEach(function(x){{x.classList.toggle('on',x===b);}});sort(b.dataset.k,b.dataset.dir);}});}});
 sort('pts','desc');}})();
 </script>"""
 
