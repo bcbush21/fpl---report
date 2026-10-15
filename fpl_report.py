@@ -65,6 +65,13 @@ def get(url):
     return r.json()
 
 
+def _safe_get(url, key):
+    try:
+        return get(url).get(key, [])
+    except requests.RequestException:
+        return []
+
+
 def load_data():
     boot = get(f"{DRAFT}/bootstrap-static")
     entry = get(f"{DRAFT}/entry/{ENTRY_ID}/public")["entry"]
@@ -80,6 +87,8 @@ def load_data():
         boot=boot, entry=entry, league_id=league_id, current=current, next=nxt,
         picks=get(f"{DRAFT}/entry/{ENTRY_ID}/event/{current}")["picks"],
         status=get(f"{DRAFT}/league/{league_id}/element-status")["element_status"],
+        # every waiver and free-agent move in the league, for the review of your own moves
+        transactions=_safe_get(f"{DRAFT}/draft/league/{league_id}/transactions", "transactions"),
         details=get(f"{DRAFT}/league/{league_id}/details"),
         fixtures=get(f"{CLASSIC}/fixtures/"),  # team ids match the Draft game
     )
