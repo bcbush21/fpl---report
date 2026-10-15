@@ -26,7 +26,6 @@ CACHE = Path(os.environ.get("OC_CACHE") or Path(__file__).with_name("other_comps
 PL_LEAGUE = 39
 LOOKBACK_DAYS = 21          # how far back to look for cup and European games
 MAX_CALLS = 45              # per run; leaves room under the 100-a-day free limit for a second run
-PL_LIST_TTL_H = 20          # refresh the season's league fixture list once a day
 CALL_GAP = 6.5              # seconds between calls, to stay under ~10 a minute
 UPCOMING_TTL_H = 12         # re-check upcoming days' fixtures after this many hours
 FINISHED = {"FT", "AET", "PEN", "AWD", "WO"}
@@ -129,9 +128,6 @@ def fetch(fpl_teams, season, today=None):
         tmap = map_teams(fpl_teams, cache[tk])
         cache["team_map"] = {str(k): v for k, v in tmap.items()}
         pl_ids = set(tmap.values())
-        pen_status = fetch_penalties(cl, cache, season)
-        if pen_status:
-            status = pen_status
 
         fx = cache.setdefault("fixtures", {})      # fixture id -> compact fixture
         days = cache.setdefault("days", {})         # date -> {"at": iso time fetched, "done": bool}
@@ -201,61 +197,6 @@ def fetch(fpl_teams, season, today=None):
     _save_cache(cache)
     print(f"Other competitions: {cl.calls} API-Football calls, status {status}")
     return cache, status
-
-
-def fetch_penalties(cl, cache, season):
-    """Penalty events for every finished league game this season. Up to 20 games per request, each
-    game fetched once. Returns an error message, or None if it went fine."""
-    now = dt.datetime.now(dt.timezone.utc)
-    lk = f"pl_{season}"
-    try:
-        info = cache.get(lk) or {}
-        age = (now - dt.datetime.fromisoformat(info["at"])).total_seconds() / 3600 if info.get("at") else 1e9
-        if age >= PL_LIST_TTL_H:
-            rows = cl.get("fixtures", league=PL_LEAGUE, season=season)
-            cache[lk] = dict(at=now.isoformat(), fx=[dict(id=r["fixture"]["id"], st=r["fixture"]["status"]["short"],
-                                                          h=r["teams"]["home"]["id"], a=r["teams"]["away"]["id"])
-                                                     for r in rows])
-        ev = cache.setdefault(f"pens_{season}", {})
-        todo = [f["id"] for f in cache[lk]["fx"] if f["st"] in FINISHED and str(f["id"]) not in ev]
-        for i in range(0, len(todo), 20):
-            for r in cl.get("fixtures", ids="-".join(str(x) for x in todo[i:i + 20])):
-                ev[str(r["fixture"]["id"])] = [
-                    [e["team"]["id"], e.get("detail"), (e.get("player") or {}).get("name"), (e.get("time") or {}).get("elapsed")]
-                    for e in r.get("events") or []
-                    if e.get("type") == "Goal" and e.get("detail") in ("Penalty", "Missed Penalty")]
-    except ApiError as err:
-        return "budget" if "budget" in str(err) else f"error: penalties: {err}"
-    except (requests.RequestException, KeyError, ValueError) as err:
-        return f"error: penalties: {err}"
-    return None
-
-
-def penalties(cache, season):
-    """{FPL team id: won, scored, missed, conceded, conceded_scored, takers}, plus how many games are covered."""
-    tmap = {int(k): v for k, v in (cache.get("team_map") or {}).items()}
-    inv = {v: k for k, v in tmap.items()}
-    fx = {str(f["id"]): f for f in (cache.get(f"pl_{season}") or {}).get("fx", [])}
-    ev = cache.get(f"pens_{season}") or {}
-    out = {tid: dict(won=0, sc=0, miss=0, conc=0, conc_sc=0, takers={}) for tid in tmap}
-    for fid, events in ev.items():
-        f = fx.get(fid)
-        if not f:
-            continue
-        for team, detail, name, _ in events:
-            mine, opp = inv.get(team), inv.get(f["a"] if team == f["h"] else f["h"])
-            scored = detail == "Penalty"
-            if mine in out:
-                o = out[mine]
-                o["won"] += 1
-                o["sc" if scored else "miss"] += 1
-                if name:
-                    o["takers"][name] = o["takers"].get(name, 0) + 1
-            if opp in out:
-                out[opp]["conc"] += 1
-                out[opp]["conc_sc"] += 1 if scored else 0
-    done = sum(1 for f in fx.values() if f["st"] in FINISHED)
-    return out, len([k for k in ev if k in fx]), done
 
 
 # ---------------------------------------------------------------- matching players
