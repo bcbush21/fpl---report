@@ -2840,6 +2840,101 @@ def moves_html(d, players):
     return head + body
 
 
+# ---------------------------------------------------------------- bonus points
+
+def bonus_rows(d, players, teams):
+    """Every player with bonus this season: total, the games it came in and who against."""
+    src, live_min, bps = d.get("live_src", {}), d.get("live_min", {}), d.get("live_bps", {})
+    fin = finished_gws(d)
+    opps = {}  # (team, gw) -> [(opponent short name, home)]
+    for f in d["fixtures"]:
+        gw = f.get("event")
+        if gw in fin:
+            opps.setdefault((f["team_h"], gw), []).append((teams[f["team_a"]]["name"], 1))
+            opps.setdefault((f["team_a"], gw), []).append((teams[f["team_h"]]["name"], 0))
+    rows = []
+    for p in players.values():
+        hauls, apps, bps_tot = [], 0, 0
+        for gw in fin:
+            m = live_min.get(gw, {}).get(p["id"], 0)
+            if not m:
+                continue
+            apps += 1
+            bps_tot += bps.get(gw, {}).get(p["id"], 0)
+            b = (src.get(gw, {}).get(p["id"]) or {}).get("bonus", 0)
+            if b:
+                vs = opps.get((p["tid"], gw), [])
+                hauls.append([gw, b, " & ".join(o for o, _ in vs) or "?", vs[0][1] if len(vs) == 1 else -1,
+                              d["live"].get(gw, {}).get(p["id"], 0)])
+        if not hauls:
+            continue
+        rows.append([p["id"], p["name"], p["team"], p["tid"], p["pos"],
+                     "You" if p["mine"] else (p["owner"] or ""), sum(h[1] for h in hauls), len(hauls), apps,
+                     round(bps_tot / apps, 1) if apps else 0, hauls, p.get("code")])
+    return rows
+
+
+def bonus_section(d, players, teams):
+    rows = bonus_rows(d, players, teams)
+    data = json.dumps(dict(rows=rows, teams={tid: t["name"] for tid, t in teams.items()}, photo=PHOTO, badge=BADGE,
+                           codes={tid: t["code"] for tid, t in teams.items()}),
+                      separators=(",", ":")).replace("</", "<\\/")
+    return f"""<section id="bonus"><h2>Bonus points</h2>
+<p class="note">Every player who has earned bonus this season: how much, how many games it came in, and who it was against.
+Bonus goes to the three best players in each match by FPL's BPS score (3, 2 and 1). <b>Avg BPS</b> is his average BPS score across
+every game he's played, a guide to how often he gets near the top three. Each box shows the gameweek, the bonus, the opponent
+(H or A) and his total points that week.</p>
+<div class="card cmp-tools"><div class="cmp-row">
+<input id="bn-q" type="search" placeholder="Search a player or club" autocomplete="off">
+<select id="bn-who"><option value="all">All players</option><option value="fa">Available (free agents)</option><option value="mine">My players</option></select>
+<select id="bn-pos"><option value="">All positions</option><option>GK</option><option>DEF</option><option>MID</option><option>FWD</option></select>
+<select id="bn-sort"><option value="most">Most bonus first</option><option value="least">Least bonus first</option>
+<option value="rate">Most bonus per game</option><option value="bps">Highest avg BPS</option></select></div>
+<p id="bn-count" class="note" style="margin:8px 0 0"></p></div>
+<div class="card"><div class="tw"><table class="bnt"><thead><tr><th>#</th><th>Player</th><th>Bonus</th><th>Games with bonus</th>
+<th>Avg BPS</th><th>Where it came from</th></tr></thead><tbody id="bn-body"></tbody></table></div></div>
+<script type="application/json" id="bn-data">{data}</script>
+<script>{BONUS_JS}</script></section>"""
+
+
+BONUS_JS = r"""
+(function(){
+const D = JSON.parse(document.getElementById('bn-data').textContent);
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').normalize('NFD').replace(/[̀-ͯ]/g, '');
+const ini = n => n.replace(/\./g,' ').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+const photo = (code, n) => `<span class="ph" style="--s:36px"><span class="ini">${esc(ini(n))}</span>${code ? `<img src="${D.photo.replace('{code}', code)}" alt="" onerror="this.remove()">` : ''}</span>`;
+const badge = tid => `<img class="badge" src="${D.badge.replace('{code}', D.codes[tid])}" width="14" height="14" alt="" onerror="this.style.visibility='hidden'">`;
+// [id, name, team, tid, pos, owner, total, games, apps, avgBps, hauls[[gw, bonus, opp, home, pts]], code]
+function draw(){
+  const q = fold($('#bn-q').value.trim()), who = $('#bn-who').value, pos = $('#bn-pos').value, sort = $('#bn-sort').value;
+  let rs = D.rows.filter(r => (!pos || r[4] === pos) && (who === 'all' || (who === 'fa' && !r[5]) || (who === 'mine' && r[5] === 'You'))
+    && (!q || fold(r[1]).includes(q) || fold(r[2]).includes(q)));
+  const rate = r => r[6] / Math.max(r[8], 1);
+  const cmp = {most: (a, b) => b[6] - a[6] || a[8] - b[8], least: (a, b) => a[6] - b[6] || b[8] - a[8],
+               rate: (a, b) => rate(b) - rate(a) || b[6] - a[6], bps: (a, b) => b[9] - a[9] || b[6] - a[6]}[sort];
+  rs.sort(cmp);
+  $('#bn-count').textContent = `${rs.length} player${rs.length === 1 ? '' : 's'} with bonus${who === 'fa' ? ', available' : who === 'mine' ? ', on your team' : ''}.`;
+  $('#bn-body').innerHTML = rs.map((r, i) => {
+    const own = r[5] === 'You' ? '<span class="tag you">You</span>' : r[5] ? `<span class="mut">${esc(r[5])}</span>` : '<span class="tag fa">Free agent</span>';
+    const hauls = r[10].slice().reverse().map(([gw, b, opp, home, pts]) =>
+      `<span class="bnh b${b}" title="GW${gw}: ${b} bonus vs ${esc(opp)}${home === 1 ? ' (home)' : home === 0 ? ' (away)' : ''}, ${pts} pts that week"><b>+${b}</b><small>GW${gw} · ${esc(opp)}${home === 1 ? ' (H)' : home === 0 ? ' (A)' : ''}</small></span>`).join('');
+    return `<tr class="${r[5] === 'You' ? 'mine' : ''}"><td class="rk">${i + 1}</td>
+      <td><div class="who">${photo(r[11], r[1])}<div><div class="nm">${esc(r[1])} <button class="cmp-add" data-id="${r[0]}">+ Compare</button></div>
+        <div class="tm">${badge(r[3])}${esc(r[2])} · ${r[4]} · ${own}</div></div></div></td>
+      <td><span class="bignum">${r[6]}</span><span class="sub2">${(r[6] / Math.max(r[8], 1)).toFixed(2)} a game</span></td>
+      <td>${r[7]} of ${r[8]}<span class="sub2">games played</span></td>
+      <td>${r[9].toFixed(1)}</td>
+      <td><div class="bnhs">${hauls}</div></td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty">No players match.</td></tr>';
+}
+['#bn-q', '#bn-who', '#bn-pos', '#bn-sort'].forEach(s => $(s).addEventListener(s === '#bn-q' ? 'input' : 'change', draw));
+draw();
+})();
+"""
+
+
 # ---------------------------------------------------------------- interactive player comparison
 
 def points_by_gw(p, d, fin):
@@ -2990,6 +3085,12 @@ MOVES_CSS = """
 .pbu i,.pbd i{display:block;width:100%}.pbu i:first-child{border-radius:4px 4px 0 0}
 .pbd{display:flex;flex-direction:column;width:100%;max-width:34px;border-top:1px solid #cbd5e1}
 .pbc small{font-size:10px;color:var(--muted);line-height:1.3}.pbc small.pbp{color:var(--amber)}.pbc small.pbn{color:var(--red)}
+.bnt td{vertical-align:middle}.bnt td.rk{color:var(--muted);font-weight:700}
+.bnt td:last-child{white-space:normal;min-width:260px}
+.bnhs{display:flex;flex-wrap:wrap;gap:5px}
+.bnh{display:inline-flex;flex-direction:column;align-items:center;border-radius:8px;padding:3px 8px;min-width:64px;line-height:1.25}
+.bnh b{font-size:14px}.bnh small{font-size:10px;color:var(--muted);white-space:nowrap}
+.bnh.b3{background:#fde9b7;color:#8a5a00}.bnh.b2{background:#eef1f6;color:#334155}.bnh.b1{background:#f7ece4;color:#8a4b1f}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -3965,7 +4066,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#bonus">Bonus</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -3974,6 +4075,8 @@ def render(d, players, teams, log=None):
 {recap_section(d, players, teams, log)}
 
 {benchmark_section(d, players, squad)}
+
+{bonus_section(d, players, teams)}
 
 {squad_review_section(squad, players, teams, d)}
 
