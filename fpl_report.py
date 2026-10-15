@@ -3058,7 +3058,6 @@ function options(me){
   const pool = D.players.filter(p => p.pos === me.pos && p.id !== me.id && !p.mine && mv(p).ps);
   return {
     fa: rank(pool.filter(p => p.fa), me),
-    trade: rank(pool.filter(p => !p.fa && mv(p).a3 > mv(me).a3), me),
   };
 }
 
@@ -3200,7 +3199,7 @@ function dropList(){
 function card({p, why}){
   const m = mv(p), dropping = plan.drop.includes(p.id);
   const o = options(p);
-  const fa = o.fa.slice(0, 4), tr = o.trade.slice(0, 3);
+  const fa = o.fa.slice(0, 4);
   return `<div class="mv-card"><div class="mv-me"><div class="mv-top"><div class="who">${photo(p, 52)}<div>
       <div class="nm">${esc(p.n)} <span class="tag you">Your ${POSW[p.pos]}</span></div>
       <div class="tm">${badge(p.tid, 14)}${esc(p.tf)} · ${f1(m.a3)} pts a week over his last ${m.k} (${p.pos} bar ${D.bar[p.pos].toFixed(1)})</div>
@@ -3213,7 +3212,7 @@ function card({p, why}){
       <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div></div></div>
     <div class="mv-opts"><h4>Free agents who pass both tests</h4>${fa.length ? fa.map(x => optRow(x, p, false)).join('') :
       `<p class="mv-none">No free-agent ${POSW[p.pos]}s pass both tests right now.</p>`}
-    ${tr.length ? `<h4>Better, but owned: trade targets</h4>${tr.map(x => optRow(x, p, true)).join('')}` : ''}</div></div>`;
+</div></div>`;
 }
 
 function strip(){
