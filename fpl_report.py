@@ -15,6 +15,7 @@ import datetime
 import html
 import json
 import math
+import re
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -2459,6 +2460,208 @@ def assess(d, players, teams):
     return bar
 
 
+# ---------------------------------------------------------------- watch list
+#
+# Each pick is a GitHub issue on this repo titled "Watch: <name> (<club>)", with the reason as its description
+# and the FPL player id on a line of its own. The report form opens GitHub with all of that filled in; you
+# tap Submit. Tracking starts from the first gameweek after the issue was opened. Close the issue to stop
+# tracking: it moves to "Past picks" with its record frozen at that point.
+
+REPO = os.environ.get("GITHUB_REPOSITORY") or "bcbush21/fpl---report"
+
+
+def gw_deadlines(d):
+    evs = d["boot"].get("events")
+    evs = evs.get("data") if isinstance(evs, dict) else evs
+    out = []
+    for e in evs or []:
+        t = parse_ts(e.get("deadline_time"))
+        if t and e.get("id"):
+            out.append((e["id"], t))
+    return sorted(out)
+
+
+def fetch_watch_issues():
+    """Every 'Watch:' issue on the repo, open and closed."""
+    mock = os.environ.get("WATCH_ISSUES_FILE")
+    if mock:
+        return json.loads(Path(mock).read_text())
+    headers = {"Accept": "application/vnd.github+json"}
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    out = []
+    for page in range(1, 6):
+        r = requests.get(f"https://api.github.com/repos/{REPO}/issues", headers=headers, timeout=30,
+                         params=dict(state="all", per_page=100, page=page, sort="created", direction="desc"))
+        r.raise_for_status()
+        rows = r.json()
+        out += [i for i in rows if not i.get("pull_request") and str(i.get("title", "")).lower().startswith("watch:")]
+        if len(rows) < 100:
+            break
+    return out
+
+
+def watch_entries(d, players):
+    """Parse the issues into tracked picks with each player's record since he was added."""
+    try:
+        issues = fetch_watch_issues()
+        err = None
+    except (requests.RequestException, ValueError, OSError) as e:
+        issues, err = [], str(e)
+    dl = gw_deadlines(d)
+    season_start = dl[0][1] - datetime.timedelta(days=75) if dl else None
+    _, _, _, bar = league_benchmark(d, players)
+    live, live_min = d.get("live", {}), d.get("live_min", {})
+    done = [gw for gw in sorted(live) if gw <= d["current"]]
+    entries = []
+    for i in issues:
+        body = i.get("body") or ""
+        m = re.search(r"player-id:\s*(\d+)", body)
+        made = parse_ts(i.get("created_at"))
+        if not m or not made or (season_start and made < season_start):
+            continue
+        p = players.get(int(m.group(1)))
+        if not p:
+            continue
+        closed = parse_ts(i.get("closed_at")) if i.get("state") == "closed" else None
+        start = next((gw for gw, t in dl if t > made), None)       # first gameweek after he was added
+        end = next((gw for gw, t in dl if t > closed), None) if closed else None  # tracking stops before this one
+        gws = [gw for gw in done if start and gw >= start and (end is None or gw < end)]
+        rows = [(gw, live.get(gw, {}).get(p["id"], 0), live_min.get(gw, {}).get(p["id"], 0)) for gw in gws]
+        reason = re.split(r"\n\s*---\s*\n", body)[0].strip()
+        when = re.search(r"owner-when-added:\s*(.+)", body)
+        n = len(rows)
+        avg = sum(r[1] for r in rows) / n if n else None
+        b = bar.get(p["pos"], 0)
+        gap = avg - b if avg is not None else None
+        verdict = ("Too early" if n < 2 else "Good call" if gap >= 1 else "Miss" if gap <= -1 else "About average")
+        entries.append(dict(
+            p=p, num=i.get("number"), url=i.get("html_url"), reason=reason, made=made, closed=closed, start=start,
+            rows=rows, n=n, total=sum(r[1] for r in rows), avg=avg, bar=b, gap=gap, verdict=verdict,
+            mins=sum(r[2] for r in rows) / n if n else None,
+            owner_then=when.group(1).strip() if when else None))
+    entries.sort(key=lambda e: e["made"], reverse=True)
+    return entries, err
+
+
+VERDICT_CLS = {"Good call": "wv-good", "About average": "wv-mid", "Miss": "wv-bad", "Too early": "wv-early"}
+
+
+def watch_card(e, d):
+    p = e["p"]
+    now_own = "On your team" if p["mine"] else (f"Owned by {p['owner']}" if p["owner"] else "Still a free agent")
+    then = f" · was {e['owner_then'].lower()} when added" if e["owner_then"] else ""
+    chips = "".join(f'<div class="dcol"><small>GW{gw}</small>{diff_chip(pts if mins else None, e["bar"], f"GW{gw}")}'
+                    f'<small>{mins}\'</small></div>' for gw, pts, mins in e["rows"])
+    if not e["rows"]:
+        chips = f'<span class="mut">Tracking starts GW{e["start"]}.</span>' if e["start"] else '<span class="mut">-</span>'
+    stats = ("" if e["n"] == 0 else
+             f'<div class="ws"><div><span class="k">Since added</span><span class="v">{e["total"]} pts</span>'
+             f'<span class="k2">{plural(e["n"], "gameweek")}</span></div>'
+             f'<div><span class="k">A week</span><span class="v">{e["avg"]:.1f}</span><span class="k2">{p["pos"]} bar {e["bar"]:.1f}</span></div>'
+             f'<div><span class="k">vs bar</span><span class="v {"pos" if e["gap"] > 0 else "neg" if e["gap"] < 0 else ""}">{e["gap"]:+.1f}</span></div>'
+             f'<div><span class="k">Minutes</span><span class="v">{e["mins"]:.0f}\'</span><span class="k2">a game</span></div></div>')
+    added = f"Added {e['made']:%b} {e['made'].day}" + (f", stopped {e['closed']:%b} {e['closed'].day}" if e["closed"] else "")
+    return f'''<div class="wc">
+<div class="wc-top">{who(p)}<span class="wv {VERDICT_CLS[e["verdict"]]}">{e["verdict"]}</span></div>
+<p class="wr">“{esc(e["reason"]) or '<span class="mut">No reason written</span>'}”</p>
+<div class="tm">{added} · {esc(now_own)}{esc(then)} · <a href="{esc(e["url"])}" target="_blank" rel="noopener">edit or stop tracking</a></div>
+{stats}<div class="dchips" style="margin-top:8px">{chips}</div></div>'''
+
+
+def watch_section(d, players):
+    entries, err = watch_entries(d, players)
+    active = [e for e in entries if not e["closed"]]
+    past = [e for e in entries if e["closed"]]
+    judged = [e for e in entries if e["verdict"] != "Too early"]
+    good = sum(1 for e in judged if e["verdict"] == "Good call")
+    summary = ""
+    if judged:
+        avg_gap = sum(e["gap"] for e in judged) / len(judged)
+        signed = [e for e in judged if e["p"]["mine"]]
+        passed = [e for e in judged if not e["p"]["mine"]]
+        def rate(xs):
+            return f'{sum(1 for e in xs if e["verdict"] == "Good call")} of {len(xs)} good calls' if xs else "none yet"
+        summary = (f'<div class="card"><h3>Your eye so far</h3><div class="ws">'
+                   f'<div><span class="k">Picks judged</span><span class="v">{len(judged)}</span><span class="k2">2+ gameweeks tracked</span></div>'
+                   f'<div><span class="k">Good calls</span><span class="v">{good}</span><span class="k2">a point+ a week above the bar</span></div>'
+                   f'<div><span class="k">Average vs bar</span><span class="v {"pos" if avg_gap > 0 else "neg"}">{avg_gap:+.1f}</span><span class="k2">points a week</span></div>'
+                   f'<div><span class="k">Signed</span><span class="v">{len(signed)}</span><span class="k2">{rate(signed)}</span></div>'
+                   f'<div><span class="k">Passed on</span><span class="v">{len(passed)}</span><span class="k2">{rate(passed)}</span></div>'
+                   f'</div></div>')
+    watched = sorted({e["p"]["id"] for e in active})
+    pdata = json.dumps([[p["id"], p["name"], p["team"], p["pos"], "You" if p["mine"] else (p["owner"] or ""),
+                         round(p.get("as", {}).get("avg3", 0), 1)]
+                        for p in sorted(players.values(), key=lambda q: (bool(q["owner"]), -q.get("as", {}).get("avg3", 0)))
+                        if p["mins"] > 0 or not p["owner"]], separators=(",", ":")).replace("</", "<\\/")
+    warn = (f'<p class="note"><b class="neg">Couldn\'t read the watch list from GitHub this time</b> ({esc(err)}). '
+            'It will be back on the next build.</p>') if err else ""
+    return f"""<section id="watch"><h2>Watch list</h2>
+<p class="note">Players you like, with your reason, tracked from the gameweek after you add them, whether you sign them or not.
+Each pick gets a verdict once it has 2 gameweeks: <b>Good call</b> if he's averaged at least a point a week above the bar for his
+position, <b>Miss</b> if a point below, otherwise <b>About average</b>. Picks are saved on GitHub, so they last all season and show on any device.</p>
+{warn}
+<div class="card wadd"><h3>Add a player</h3>
+<input id="w-q" type="search" placeholder="Search any Premier League player or club" autocomplete="off">
+<div id="w-res" class="cmp-res"></div>
+<div id="w-form" hidden><div id="w-sel"></div>
+<textarea id="w-why" rows="3" placeholder="Why do you like him? e.g. Won his spot, on pens, great run of fixtures, pairs with my Villa player"></textarea>
+<button id="w-save" class="sb on">Save to watch list</button>
+<p class="note" style="margin:8px 0 0">Opens GitHub with everything filled in; tap <b>Create</b> there. It shows up here in about two minutes.</p></div></div>
+{summary}
+<h3 class="lbl">Watching ({len(active)})</h3>
+{''.join(watch_card(e, d) for e in active) or '<p class="mv-none">Nothing on your watch list yet. Add a player above, or tap Watch next to any option in Drop &amp; get.</p>'}
+{f'<h3 class="lbl">Past picks ({len(past)})</h3>' + ''.join(watch_card(e, d) for e in past) if past else ''}
+<script type="application/json" id="w-data">{pdata}</script>
+<script>{WATCH_JS.replace("__REPO__", REPO).replace("__WATCHED__", json.dumps(watched)).replace("__GW__", str(d["next"]))}</script>
+</section>"""
+
+
+WATCH_JS = r"""
+(function(){
+const ALL = JSON.parse(document.getElementById('w-data').textContent);
+const WATCHED = __WATCHED__;
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let sel = null;
+// accent-blind matching, so "kadi" finds Kadıoğlu and "odegaard" finds Ødegaard
+const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').replace(/ß/g, 'ss').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+function results(){
+  const q = fold($('#w-q').value.trim());
+  if (!q){ $('#w-res').innerHTML = ''; return; }
+  const rs = ALL.filter(p => fold(p[1]).includes(q) || fold(p[2]).includes(q)).slice(0, 8);
+  $('#w-res').innerHTML = rs.map(p => `<button class="cmp-r w-pick" data-id="${p[0]}"><span><b>${esc(p[1])}</b>
+    <small>${esc(p[2])} · ${p[3]} · ${p[4] ? esc(p[4]) : 'Free agent'}${WATCHED.includes(p[0]) ? ' · already watching' : ''}</small></span>
+    <em>${p[5].toFixed(1)} last 3</em></button>`).join('') || '<p class="empty">No players match.</p>';
+}
+function pick(id){
+  sel = ALL.find(p => p[0] === +id); if (!sel) return;
+  $('#w-res').innerHTML = ''; $('#w-q').value = '';
+  $('#w-form').hidden = false;
+  $('#w-sel').innerHTML = `<p style="margin:10px 0 6px"><b>${esc(sel[1])}</b> <span class="mut">${esc(sel[2])} · ${sel[3]} · ${sel[4] ? esc(sel[4]) : 'Free agent'}</span>
+    <button id="w-clear" class="sb" style="margin-left:8px">Change</button></p>`;
+  $('#w-why').focus();
+}
+function save(){
+  if (!sel) return;
+  const why = $('#w-why').value.trim();
+  const title = `Watch: ${sel[1]} (${sel[2]})`;
+  const body = `${why || '(no reason written)'}\n\n---\nplayer-id: ${sel[0]}\nowner-when-added: ${sel[4] === 'You' ? 'On my team' : sel[4] ? 'Owned by ' + sel[4] : 'Free agent'}\nadded-before: GW__GW__\n`;
+  window.open(`https://github.com/__REPO__/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`, '_blank', 'noopener');
+}
+$('#w-q').addEventListener('input', results);
+document.addEventListener('click', e => {
+  const b = e.target.closest('.w-pick, #w-clear, #w-save, .watch-add'); if (!b) return;
+  e.preventDefault();
+  if (b.classList.contains('w-pick')) pick(b.dataset.id);
+  else if (b.id === 'w-clear'){ sel = null; $('#w-form').hidden = true; $('#w-q').focus(); }
+  else if (b.id === 'w-save') save();
+  else { if (window.showTab) window.showTab('watch'); pick(b.dataset.id); }
+});
+})();
+"""
+
+
 # ---------------------------------------------------------------- interactive player comparison
 
 def compare_data(d, players, teams):
@@ -2568,6 +2771,17 @@ MOVES_CSS = """
 .pvt tr.pv1 td{border-bottom:0;padding-bottom:4px}.pvt tr.pv2 td{padding-top:4px;border-bottom:2px solid var(--line)}
 .pvt tr.pv2 td{background:#fafbfd}.pvt tr.pv1.mine td{background:none}
 .pvt td.per{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.wadd input[type=search]{width:100%;max-width:480px;font:inherit;font-size:16px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:#fff}
+.wadd textarea{width:100%;max-width:640px;font:inherit;border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:block;margin:6px 0 10px}
+.wc{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 22px;margin:14px 0}
+.wc-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.wr{font-size:16px;margin:10px 0 6px;color:var(--ink);font-style:italic}
+.wv{font-size:13px;font-weight:800;border-radius:999px;padding:4px 12px;white-space:nowrap}
+.wv-good{background:var(--green-soft);color:var(--green)}.wv-bad{background:var(--red-soft);color:var(--red)}
+.wv-mid{background:#eef1f6;color:#475569}.wv-early{background:var(--blue-soft);color:var(--navy)}
+.ws{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:10px}.ws>div{display:flex;flex-direction:column}
+.ws .k{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700}
+.ws .v{font-size:22px;font-weight:800;line-height:1.2}.ws .k2{font-size:12px;color:var(--muted)}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -2712,7 +2926,8 @@ function optRow({p, t}, me, trade){
       <div class="tm"><b style="color:var(--ink)">${f1(m.a3)}</b>&nbsp;pts a week · ${m.mm}' a game</div></div></div>
     <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
     <div class="opt-acts"><button class="sb plan-get ${planned ? 'planned' : ''}" data-id="${p.id}">${planned ? '✓ Planning to get' : 'Plan to get'}</button>
-      <button class="sb cmp-add" data-id="${p.id}">+ Compare</button></div></div>`;
+      <button class="sb cmp-add" data-id="${p.id}">+ Compare</button>
+      <button class="sb watch-add" data-id="${p.id}">Watch</button></div></div>`;
 }
 
 // ---------- your players to move on
@@ -3494,7 +3709,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -3509,6 +3724,8 @@ def render(d, players, teams, log=None):
 {teams_section(d, teams, players, log)}
 
 {compare_section(d, players, teams)}
+
+{watch_section(d, players)}
 
 {predictions_section(log, players) if log is not None else ""}
 

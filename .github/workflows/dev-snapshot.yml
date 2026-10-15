@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: read
 
 jobs:
   snapshot:
@@ -24,6 +25,7 @@ jobs:
           REPORT_PATH: dev/index.html
           SNAPSHOT_OUT: dev/snapshot.pkl.gz
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Save snapshot
         run: |
           git config user.name "fpl-report-bot"
