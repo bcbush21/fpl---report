@@ -2621,6 +2621,7 @@ position, <b>Miss</b> if a point below, otherwise <b>About average</b>. Picks ar
 <h3 class="lbl">Watching ({len(active)})</h3>
 {''.join(watch_card(e, d) for e in active) or '<p class="mv-none">Nothing on your watch list yet. Add a player above, or tap Watch next to any option in Drop &amp; get.</p>'}
 {f'<h3 class="lbl">Past picks ({len(past)})</h3>' + ''.join(watch_card(e, d) for e in past) if past else ''}
+{moves_html(d, players)}
 <script type="application/json" id="w-data">{pdata}</script>
 <script>{WATCH_JS.replace("__REPO__", REPO).replace("__WATCHED__", json.dumps(watched)).replace("__GW__", str(d["next"]))}</script>
 </section>"""
@@ -2669,6 +2670,174 @@ document.addEventListener('click', e => {
 });
 })();
 """
+
+
+# ---------------------------------------------------------------- your moves, rated
+#
+# Every waiver claim and free-agent pickup you've made, from the league's transaction log. Each move is a swap,
+# so it gets two ratings:
+#   Pickup: how the player you brought in scored while he was on your team, against the bar for his position
+#           and against the player you dropped for him over the same gameweeks.
+#   Drop:   how the player you let go scored after he left (until now, or until you brought him back), against
+#           the bar and against the player who replaced him.
+# Good = beat both, Bad = beat neither, Mixed = one of the two. Only finished gameweeks count.
+
+MOVE_CLS = {"Good": "wv-good", "Mixed": "wv-mid", "Bad": "wv-bad", "Too early": "wv-early", "No games": "wv-early"}
+
+
+def finished_gws(d):
+    evs = d["boot"].get("events")
+    evs = evs.get("data") if isinstance(evs, dict) else evs
+    fin = {e["id"] for e in evs or [] if e.get("finished")}
+    return [gw for gw in sorted(d.get("live", {})) if gw in fin or gw < d["current"]]
+
+
+def move_review(d, players):
+    tx = [t for t in d.get("transactions") or [] if t.get("result") == "a"]
+    if not tx:
+        return []
+    names = {}
+    for e in d["details"].get("league_entries", []):
+        names[e.get("entry_id")] = e.get("entry_name") or e.get("player_first_name", "?")
+    dl = dict(gw_deadlines(d))
+    done = finished_gws(d)
+    last = done[-1] if done else 0
+    _, _, _, bar = league_benchmark(d, players)
+    live, live_min = d.get("live", {}), d.get("live_min", {})
+
+    def eff(t):
+        """The first gameweek the move counted for."""
+        dead = dl.get(t["event"])
+        added = parse_ts(t.get("added"))
+        return t["event"] + 1 if dead and added and added > dead else t["event"]
+
+    for t in tx:
+        t["eff"] = eff(t)
+    mine = sorted([t for t in tx if t["entry"] == ENTRY_ID], key=lambda t: (t["eff"], t.get("added") or ""))
+
+    def pts(pid, gws):
+        return [live.get(gw, {}).get(pid, 0) for gw in gws]
+
+    def mins(pid, gws):
+        return [live_min.get(gw, {}).get(pid, 0) for gw in gws]
+
+    def avg(xs):
+        return sum(xs) / len(xs) if xs else None
+
+    count_in, count_out = {}, {}
+    out = []
+    for i, t in enumerate(mine):
+        pin, pout = players.get(t["element_in"]), players.get(t["element_out"])
+        if not pin or not pout:
+            continue
+        start = t["eff"]
+        count_in[pin["id"]] = count_in.get(pin["id"], 0) + 1
+        count_out[pout["id"]] = count_out.get(pout["id"], 0) + 1
+        later = mine[i + 1:]
+        # pickup window: until you dropped him again
+        drop_again = next((x for x in later if x["element_out"] == pin["id"]), None)
+        held = [gw for gw in done if gw >= start and (not drop_again or gw < drop_again["eff"])]
+        # drop window: until you brought him back
+        back = next((x for x in later if x["element_in"] == pout["id"]), None)
+        gone = [gw for gw in done if gw >= start and (not back or gw < back["eff"])]
+        rival = next((x for x in tx if x["entry"] != ENTRY_ID and x["element_in"] == pout["id"] and x["eff"] >= start
+                      and (not back or x["eff"] < back["eff"])), None)
+        b = bar.get(pin["pos"], 0)
+
+        # ---- the pickup
+        a_in, a_vs = avg(pts(pin["id"], held)), avg(pts(pout["id"], held))
+        if drop_again and drop_again["eff"] == start:
+            pv, pwhy = "No games", (f"Swapped out before he played a game for you: you dropped him for "
+                                    f"{players[drop_again['element_in']]['name'] if drop_again['element_in'] in players else 'someone else'} "
+                                    f"before GW{start}.")
+        elif not held:
+            pv, pwhy = "Too early", f"Joined for GW{start}, which hasn't finished yet."
+        else:
+            beat_bar, beat_swap = a_in >= b, a_in > a_vs
+            pv = "Good" if beat_bar and beat_swap else "Bad" if not beat_bar and not beat_swap else "Mixed"
+            m = avg(mins(pin["id"], held))
+            pwhy = (f"{a_in:.1f} a week in {plural(len(held), 'gameweek')} with you "
+                    f"({'above' if beat_bar else 'below'} the {pin['pos']} bar of {b:.1f}). "
+                    f"{pout['name']}, who you dropped for him, scored {a_vs:.1f} a week over the same games"
+                    f"{', so the swap paid off' if beat_swap else ', so you would have been better off keeping him' if a_vs > a_in else ''}.")
+            if m is not None and m == 0:
+                pwhy += " He didn't play."
+            elif m is not None and m < 45:
+                pwhy += f" He averaged only {m:.0f} minutes."
+            if drop_again:
+                pwhy += f" You dropped him again for GW{drop_again['eff']}."
+
+        # ---- the drop. If the replacement was himself swapped out before playing, the one who took the spot counts
+        rep_p, seen = pin, {pin["id"]}
+        while True:
+            nxt = next((x for x in later if x["element_out"] == rep_p["id"] and x["eff"] == start
+                        and x["element_in"] in players and x["element_in"] not in seen), None)
+            if not nxt:
+                break
+            rep_p = players[nxt["element_in"]]
+            seen.add(rep_p["id"])
+        a_out, a_rep = avg(pts(pout["id"], gone)), avg(pts(rep_p["id"], gone))
+        if back and back["eff"] == start:
+            sv, swhy = "No games", f"You brought him back before GW{start}, so he never missed a game for you."
+        elif not gone:
+            sv, swhy = "Too early", f"Left for GW{start}, which hasn't finished yet."
+        else:
+            below_bar, rep_better = a_out < b, a_rep > a_out
+            sv = "Good" if below_bar and rep_better else "Bad" if not below_bar and not rep_better else "Mixed"
+            m = avg(mins(pout["id"], gone))
+            swhy = (f"{a_out:.1f} a week in {plural(len(gone), 'gameweek')} since you let him go "
+                    f"({'below' if below_bar else 'above'} the {pout['pos']} bar of {b:.1f}). "
+                    f"{rep_p['name']}, who replaced him, scored {a_rep:.1f} a week over the same games.")
+            if m is not None and m == 0:
+                swhy += " He hasn't played since."
+            elif m is not None and m < 30:
+                swhy += f" He's barely played since ({m:.0f} minutes a game)."
+            if rival:
+                swhy += f" {names.get(rival['entry'], 'A rival')} picked him up for GW{rival['eff']}."
+            if back:
+                swhy += f" You brought him back for GW{back['eff']}."
+
+        net = (sum(pts(pin["id"], held)) - sum(pts(pout["id"], held))) if held else None
+        out.append(dict(gw=start, kind="Waiver" if t["kind"] == "w" else "Free agent", pin=pin, pout=pout,
+                        pv=pv, pwhy=pwhy, sv=sv, swhy=swhy, net=net,
+                        nth_in=count_in[pin["id"]], nth_out=count_out[pout["id"]], last=last))
+    return out
+
+
+def moves_html(d, players):
+    rows = move_review(d, players)
+    if not rows:
+        return ""
+    judged_p = [r for r in rows if r["pv"] in ("Good", "Mixed", "Bad")]
+    judged_s = [r for r in rows if r["sv"] in ("Good", "Mixed", "Bad")]
+    net = sum(r["net"] for r in rows if r["net"] is not None)
+
+    def score(xs, k):
+        return f'{sum(1 for r in xs if r[k] == "Good")} good · {sum(1 for r in xs if r[k] == "Mixed")} mixed · {sum(1 for r in xs if r[k] == "Bad")} bad'
+
+    head = (f'<div class="card"><h3>Your moves this season</h3>'
+            f'<p class="note">Every waiver claim and free-agent pickup you\'ve made. Each move gets two ratings. '
+            f'<b>Pickup:</b> did the player you brought in beat the bar for his position while he was yours, and outscore the '
+            f'player you dropped over the same gameweeks? <b>Drop:</b> did the player you let go fall below the bar afterwards, '
+            f'and get outscored by his replacement? Good = both, Bad = neither, Mixed = one of the two. Players you moved more '
+            f'than once are rated for each move.</p>'
+            f'<div class="ws"><div><span class="k">Moves</span><span class="v">{len(rows)}</span></div>'
+            f'<div><span class="k">Pickups</span><span class="v" style="font-size:16px">{score(judged_p, "pv")}</span></div>'
+            f'<div><span class="k">Drops</span><span class="v" style="font-size:16px">{score(judged_s, "sv")}</span></div>'
+            f'<div><span class="k">Net points from swaps</span><span class="v {"pos" if net > 0 else "neg" if net < 0 else ""}">{net:+d}</span>'
+            f'<span class="k2">what you got vs what you gave up, while held</span></div></div></div>')
+    body = ""
+    for r in sorted(rows, key=lambda r: -r["gw"]):
+        def side(p, label, v, why, nth, verb):
+            again = f' <span class="tag">{nth}{"nd" if nth == 2 else "rd" if nth == 3 else "th"} time {verb}</span>' if nth > 1 else ""
+            return (f'<div class="mvs"><div class="mvs-top"><span class="mvs-l">{label}</span>{who(p)}{again}'
+                    f'<span class="wv {MOVE_CLS[v]}">{v}{(" pickup" if label == "In" else " drop") if v in ("Good", "Mixed", "Bad") else ""}</span></div>'
+                    f'<p class="mvs-why">{esc(why)}</p></div>')
+        net_txt = "" if r["net"] is None else f'<span class="{"pos" if r["net"] > 0 else "neg" if r["net"] < 0 else "mut"}">{r["net"]:+d} pts</span> while held'
+        body += (f'<div class="mvr"><div class="mvr-h"><b>GW{r["gw"]}</b> · {r["kind"]}{" · " + net_txt if net_txt else ""}</div>'
+                 f'<div class="mvr-b">{side(r["pin"], "In", r["pv"], r["pwhy"], r["nth_in"], "in")}'
+                 f'{side(r["pout"], "Out", r["sv"], r["swhy"], r["nth_out"], "out")}</div></div>')
+    return head + body
 
 
 # ---------------------------------------------------------------- interactive player comparison
@@ -2791,6 +2960,14 @@ MOVES_CSS = """
 .ws{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:10px}.ws>div{display:flex;flex-direction:column}
 .ws .k{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700}
 .ws .v{font-size:22px;font-weight:800;line-height:1.2}.ws .k2{font-size:12px;color:var(--muted)}
+.mvr{background:var(--card);border:1px solid var(--line);border-radius:18px;margin:12px 0;overflow:hidden}
+.mvr-h{padding:10px 20px;background:#fbfcfe;border-bottom:1px solid var(--line);font-size:14px;color:var(--muted)}
+.mvr-h b{color:var(--ink)}.mvr-b{display:grid;grid-template-columns:1fr 1fr}
+.mvs{padding:14px 20px}.mvs+.mvs{border-left:1px solid var(--line)}
+.mvs-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mvs-top .wv{margin-left:auto}
+.mvs-l{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);width:28px}
+.mvs-why{font-size:14px;margin:8px 0 0;color:var(--ink)}
+@media (max-width:700px){.mvr-b{grid-template-columns:1fr}.mvs+.mvs{border-left:0;border-top:1px solid var(--line)}}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
