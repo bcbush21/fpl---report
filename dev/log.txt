@@ -1,2 +1,1 @@
-Other competitions: 1 API-Football calls, status error: Free plans do not have access to this season, try from 2022 to 2024.
 Report written to dev/index.html
