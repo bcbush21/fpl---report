@@ -706,14 +706,35 @@ def played_note(t, max_gp):
     return ""
 
 
-def team_table_section(teams):
+def pen_cells(t):
+    pn = t.get("pens")
+    if not pn:
+        return '<td><span class="mut">-</span></td><td><span class="mut">-</span></td>'
+    tk = ", ".join(f"{esc(n)} {c}" for n, c in sorted(pn["takers"].items(), key=lambda x: -x[1]))
+    won = (f'<span class="sub2">{pn["sc"]} scored, {pn["miss"]} missed</span><span class="sub2">Taken by {tk}</span>'
+           if pn["won"] else "")
+    conc = f'<span class="sub2">{pn["conc_sc"]} scored against</span>' if pn["conc"] else ""
+    return (f'<td><span class="bignum">{pn["won"]}</span>{won}</td>'
+            f'<td><span class="bignum">{pn["conc"]}</span>{conc}</td>')
+
+
+def team_table_section(teams, d=None):
     rows = [t for t in teams.values()]
+    cov, fin = (d or {}).get("pens_cover", (0, 0))
+    if not cov:
+        pen_note = ("Penalty columns fill in once the API-Football key is added (see the Cup &amp; Europe tab)."
+                    if (d or {}).get("oc_status") == "nokey" else "Penalty columns fill in on the next build.")
+    elif cov < fin:
+        pen_note = f"Penalties cover {cov} of {fin} league games so far; the rest fill in over the next builds."
+    else:
+        pen_note = "Penalties won counts every spot kick awarded, scored or missed; VAR-overturned decisions don't count."
     max_gp = max((t["gp"] for t in rows), default=0)
     body = []
     for t in rows:
         gd_cls = "pos" if t["gd"] > 0 else "neg" if t["gd"] < 0 else "mut"
         body.append(
             f'<tr data-pts="{t["pts"]}" data-gd="{t["gd"]}" data-gf="{t["gf"]}" data-ga="{t["ga"]}" data-cs="{t["cs"]}" '
+            f'data-pw="{(t.get("pens") or {}).get("won", -1)}" data-pc="{(t.get("pens") or {}).get("conc", -1)}" '
             f'data-name="{esc(t["full"])}">'
             f'<td class="rk"></td><td>{team_cell(t)}</td>'
             f'<td><span class="bignum">{t["gp"]}</span>{played_note(t, max_gp)}</td>'
@@ -724,21 +745,25 @@ def team_table_section(teams):
             f'<td><span class="bignum {gd_cls}">{t["gd"]:+d}</span></td>'
             f'<td><span class="bignum">{t["cs"]}</span><span class="sub2">{t["cs"] / max(t["gp"], 1):.0%} of games · '
             f'{t["cs5"]} in last {t["n5"]}</span></td>'
+            f'{pen_cells(t)}'
             f'<td><div class="fms">{form_chips(t)}</div>'
             f'<span class="sub2">{t["gf5"]} scored, {t["ga5"]} conceded</span></td></tr>')
     return f"""<div class="card"><h3>Premier League table</h3>
 <p class="note">Tap a button to re-rank. Teams with a game in hand are marked under Played, so compare points per game
-as well as the total. Small grey numbers under goals are expected goals per game. Last 5 reads oldest to newest.</p>
+as well as the total. Small grey numbers under goals are expected goals per game. Last 5 reads oldest to newest.
+{pen_note}</p>
 <div class="sortbar"><span class="note" style="margin:0">Rank by:</span>
 <button class="sb on" data-k="pts" data-dir="desc">League table (points)</button>
 <button class="sb" data-k="gd" data-dir="desc">Goal difference</button>
 <button class="sb" data-k="gf" data-dir="desc">Most goals scored</button>
 <button class="sb" data-k="ga" data-dir="asc">Fewest goals conceded</button>
 <button class="sb" data-k="ga" data-dir="desc">Most goals conceded</button>
-<button class="sb" data-k="cs" data-dir="desc">Most clean sheets</button></div>
+<button class="sb" data-k="cs" data-dir="desc">Most clean sheets</button>
+<button class="sb" data-k="pw" data-dir="desc">Most penalties won</button>
+<button class="sb" data-k="pc" data-dir="desc">Most penalties conceded</button></div>
 <div class="tw"><table class="tt" id="tt"><thead><tr><th>#</th><th>Team</th><th>Played</th><th>Points</th><th>W-D-L</th>
 <th>Scored</th><th>Conceded</th>
-<th>GD</th><th>Clean sheets</th><th>Last 5</th></tr></thead><tbody>{''.join(body)}</tbody></table></div></div>
+<th>GD</th><th>Clean sheets</th><th>Pens won</th><th>Pens conceded</th><th>Last 5</th></tr></thead><tbody>{''.join(body)}</tbody></table></div></div>
 <script>
 (function(){{var tb=document.querySelector('#tt tbody');if(!tb)return;
 function sort(k,dir){{var rows=[].slice.call(tb.rows);
@@ -747,8 +772,8 @@ if(d===0&&k==='pts')d=(+b.dataset.gd)-(+a.dataset.gd);if(d===0&&k==='pts')d=(+b.
 if(d===0)d=(+b.dataset.pts)-(+a.dataset.pts);if(d===0)d=(+b.dataset.gd)-(+a.dataset.gd);
 if(d===0)d=a.dataset.name.localeCompare(b.dataset.name);return d;}});
 rows.forEach(function(r,i){{r.cells[0].textContent=i+1;tb.appendChild(r);}});}}
-document.querySelectorAll('.sb').forEach(function(b){{b.addEventListener('click',function(){{
-document.querySelectorAll('.sb').forEach(function(x){{x.classList.toggle('on',x===b);}});sort(b.dataset.k,b.dataset.dir);}});}});
+document.querySelectorAll('.sortbar .sb').forEach(function(b){{b.addEventListener('click',function(){{
+document.querySelectorAll('.sortbar .sb').forEach(function(x){{x.classList.toggle('on',x===b);}});sort(b.dataset.k,b.dataset.dir);}});}});
 sort('pts','desc');}})();
 </script>"""
 
@@ -914,7 +939,7 @@ def wdl_bar(g, h, a):
 
 def teams_section(d, teams, players, log=None):
     return (f'<section id="teams"><h2>Premier League teams and this week\'s matchups</h2>'
-            f'{team_table_section(teams)}{matchup_section(d, teams, players, log)}</section>')
+            f'{team_table_section(teams, d)}{matchup_section(d, teams, players, log)}</section>')
 
 
 def season_section(d):
@@ -2318,6 +2343,14 @@ def add_other_comps(d, players, teams):
         print(f"Other competitions skipped: {err}")
         cache, status, per_player, clubs = {}, f"error: {err}", {}, {}
     d["oc_status"], d["oc_clubs"], d["oc_cache"] = status, clubs, cache
+    try:
+        pens, covered, finished = other_comps.penalties(cache, season_year(d))
+    except Exception as err:
+        print(f"Penalties skipped: {err}")
+        pens, covered, finished = {}, 0, 0
+    d["pens_cover"] = (covered, finished)
+    for tid, t in teams.items():
+        t["pens"] = pens.get(tid) if covered else None
     d["oc_watch"] = watch_ids(players)
     for p in players.values():
         p["oc"] = per_player.get(p["id"])
