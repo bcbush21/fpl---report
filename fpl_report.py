@@ -1442,8 +1442,8 @@ def squad_review_section(squad, players, teams, d=None):
 <div><span class="k">Per 90</span><span class="v">{p90}</span>{'<span class="k2">needs 90+ min</span>' if r["p90"] is None else ''}</div>
 <div><span class="k">Minutes</span><span class="v">{r["total_mins"]}</span><span class="k2">{r["mins_share"]:.0%} of possible</span></div>
 <div><span class="k">60+ min</span><span class="v">{r["full"]}/{r["n"]}</span></div></div>
-<div class="rv-lbl">Points by gameweek <span class="lg2"><i class="full"></i>60+ min <i class="part"></i>under 60 <i class="dnp"></i>didn't play <i class="fut"></i>predicted</span></div>
-{gw_bars(p, teams)}
+<div class="rv-lbl">Points by gameweek, by source</div>
+<div class="pbx" data-id="{p["id"]}"></div>
 {ratings_html(p, teams)}
 <div class="rv-lbl">Next {HORIZON} games {pill(n5_label)}</div>
 <p class="note" style="margin:-8px 0 0;font-size:12px">{n5_what}</p>
@@ -2842,8 +2842,19 @@ def moves_html(d, players):
 
 # ---------------------------------------------------------------- interactive player comparison
 
+def points_by_gw(p, d, fin):
+    """[[gw, minutes, [[category index, points], ...]], ...] for every finished gameweek; only non-zero sources."""
+    keys = [k for k, _, _ in PT_CATS] + ["neg"]
+    out = []
+    for gw in fin:
+        sp = split_points(d.get("live_src", {}).get(gw, {}).get(p["id"]))
+        out.append([gw, d.get("live_min", {}).get(gw, {}).get(p["id"], 0), [[i, sp[k]] for i, k in enumerate(keys) if sp[k]]])
+    return out
+
+
 def compare_data(d, players, teams):
     """Everything the in-page comparison tool needs, for every player, as compact JSON."""
+    fin = finished_gws(d)
     gws = sorted(d.get("live", {}))
     live, live_min = d.get("live", {}), d.get("live_min", {})
     _, _, _, pooled = league_benchmark(d, players)
@@ -2877,7 +2888,7 @@ def compare_data(d, players, teams):
             r5=round(sum(r["pct"] for r in rs) / len(rs), 2) if rs else None, r5n=len(rs),
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
-            mv=moves_data(p), fv=finishing_verdict(p)))
+            mv=moves_data(p), fv=finishing_verdict(p), pb=points_by_gw(p, d, fin)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
@@ -2968,6 +2979,17 @@ MOVES_CSS = """
 .mvs-l{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);width:28px}
 .mvs-why{font-size:14px;margin:8px 0 0;color:var(--ink)}
 @media (max-width:700px){.mvr-b{grid-template-columns:1fr}.mvs+.mvs{border-left:0;border-top:1px solid var(--line)}}
+.pbh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:6px}
+.pbsw{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.pbw{border:0;background:#fff;font:inherit;font-size:12px;font-weight:700;color:var(--blue);padding:3px 10px;cursor:pointer}
+.pbw.on{background:var(--blue);color:#fff}
+.pbcs{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:2px}
+.pbc{display:flex;flex-direction:column;align-items:center;min-width:30px;flex:1;max-width:56px}
+.pbc>b{font-size:12px;line-height:1.4}
+.pbu{display:flex;flex-direction:column;justify-content:flex-end;width:100%;max-width:34px}
+.pbu i,.pbd i{display:block;width:100%}.pbu i:first-child{border-radius:4px 4px 0 0}
+.pbd{display:flex;flex-direction:column;width:100%;max-width:34px;border-top:1px solid #cbd5e1}
+.pbc small{font-size:10px;color:var(--muted);line-height:1.3}.pbc small.pbp{color:var(--amber)}.pbc small.pbn{color:var(--red)}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -3040,6 +3062,42 @@ function options(me){
   };
 }
 
+// ---------- points by gameweek, split by source (one chart used everywhere; one 3 / 5 / All switch for all of them)
+let PBW = 3;
+try { const v = localStorage.getItem('fpl-pbw'); if (v !== null && [3, 5, 0].includes(+v)) PBW = +v; } catch (e) {}
+const CATKEYS = D.cats.map(c => c[0]), CATLAB = Object.fromEntries(D.cats);
+function pbChart(p){
+  const all = p.pb || [];
+  const rows = PBW ? all.slice(-PBW) : all;
+  if (!rows.length) return '<span class="mut">No gameweeks played yet</span>';
+  const pos = r => r[2].filter(([i, v]) => v > 0), neg = r => r[2].filter(([i, v]) => v < 0);
+  const totPos = r => pos(r).reduce((s, x) => s + x[1], 0), totNeg = r => -neg(r).reduce((s, x) => s + x[1], 0);
+  const top = Math.max(8, ...rows.map(totPos)), bot = Math.max(0, ...rows.map(totNeg));
+  const H = 92, scale = H / top, nH = Math.min(24, bot * scale);
+  const sums = {}; let total = 0, games = 0;
+  rows.forEach(r => { r[2].forEach(([i, v]) => { sums[CATKEYS[i]] = (sums[CATKEYS[i]] || 0) + v; total += v; }); if (r[1] > 0) games++; });
+  const cols = rows.map(r => {
+    const [gw, mins] = r, t = r[2].reduce((s, x) => s + x[1], 0);
+    const title = `GW${gw}: ${t} pts, ${mins} min` + (r[2].length ? ' — ' + r[2].map(([i, v]) => `${CATLAB[CATKEYS[i]]} ${v > 0 ? '+' : ''}${v}`).join(', ') : '');
+    const up = pos(r).map(([i, v]) => `<i style="height:${v * scale}px;background:${COL[CATKEYS[i]]}"></i>`).reverse().join('');
+    const dn = neg(r).map(([i, v]) => `<i style="height:${Math.min(-v * scale, 24)}px;background:${COL.neg}"></i>`).join('');
+    return `<div class="pbc" title="${esc(title)}"><b>${mins ? t : '–'}</b><div class="pbu" style="height:${H}px">${up}</div>
+      ${nH ? `<div class="pbd" style="height:${nH}px">${dn}</div>` : ''}<small>GW${gw}</small><small class="${mins >= 60 ? '' : mins ? 'pbp' : 'pbn'}">${mins}'</small></div>`;
+  }).join('');
+  const legend = Object.entries(sums).filter(([, v]) => v).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<span><i style="background:${COL[k]}"></i>${CATLAB[k]} ${v > 0 ? v : v}</span>`).join('');
+  const sw = [[3, 'Last 3'], [5, 'Last 5'], [0, 'All']].map(([w, l]) => `<button class="pbw${PBW === w ? ' on' : ''}" data-w="${w}">${l}</button>`).join('');
+  return `<div class="pbh"><span><b>${total} pts</b> in ${rows.length} gameweek${rows.length === 1 ? '' : 's'} · ${(total / rows.length).toFixed(1)} a week</span><span class="pbsw">${sw}</span></div>
+    <div class="pbcs">${cols}</div><div class="bd-l">${legend}</div>`;
+}
+function renderPB(){ document.querySelectorAll('.pbx').forEach(el => { const p = P[+el.dataset.id]; if (p) el.innerHTML = pbChart(p); }); }
+document.addEventListener('click', e => {
+  const b = e.target.closest('.pbw'); if (!b) return;
+  e.preventDefault(); PBW = +b.dataset.w;
+  try { localStorage.setItem('fpl-pbw', String(PBW)); } catch (err) {}
+  renderPB();
+});
+
 // ---------- building blocks
 function breakdown(p, scale){
   const m = mv(p); if (!m.c) return '';
@@ -3110,7 +3168,7 @@ function optRow({p, t}, me, trade){
   return `<div class="opt"><div class="who">${photo(p, 42)}<div><div class="nm">${esc(p.n)}${m.ro ? `<span class="role">${m.ro === 'focal' ? 'Focal point' : 'Overlooked'}</span>` : ''}</div>
       <div class="tm">${badge(p.tid, 14)}${esc(p.t)} · ${trade ? 'Owned by ' + esc(p.own) : 'Free agent'}</div>
       <div class="tm"><b style="color:var(--ink)">${f1(m.a3)}</b>&nbsp;pts a week · ${m.mm}' a game</div></div></div>
-    <div>${tickStrip(t, p)}${breakdown(p, 0)}${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
+    <div>${tickStrip(t, p)}<div class="pbx" data-id="${p.id}"></div>${fixtures(p)}<div class="bd-l">${finLine(p)}</div>${vsLine(p, me)}</div>
     <div class="opt-acts"><button class="sb plan-get ${planned ? 'planned' : ''}" data-id="${p.id}">${planned ? '✓ Planning to get' : 'Plan to get'}</button>
       <button class="sb cmp-add" data-id="${p.id}">+ Compare</button>
       <button class="sb watch-add" data-id="${p.id}">Watch</button></div></div>`;
@@ -3149,7 +3207,7 @@ function card({p, why}){
       <ul class="mv-why">${why.map(([t, c]) => `<li class="${c}">${esc(t)}</li>`).join('')}</ul></div></div>
       <div class="opt-acts"><button class="sb plan-drop ${dropping ? 'planned' : ''}" data-id="${p.id}">${dropping ? '✓ Planning to drop' : 'Plan to drop'}</button>
       <button class="sb cmp-repl-btn" data-id="${p.id}">All replacements</button></div></div>
-    <div class="mv-facts"><div><div class="mv-k">Last 3: where his points came from</div>${breakdown(p, 0)}</div>
+    <div class="mv-facts"><div style="grid-column:1/-1"><div class="mv-k">Points by gameweek, by source</div><div class="pbx" data-id="${p.id}"></div></div>
       <div><div class="mv-k">Minutes</div>${minutes(p)}</div>
       <div><div class="mv-k">Next 5</div>${fixtures(p)}<div class="bd-l">${fixNote(p)}</div></div>
       <div><div class="mv-k">Season: xG and xA vs actual</div><div class="bd-l" style="font-size:14px">${finLine(p)}</div></div></div></div>
@@ -3181,6 +3239,7 @@ function draw(){
     <h3 class="lbl">Players to move on (${list.length})</h3>
     ${list.length ? list.map(card).join('') : '<p class="mv-none">Everyone in your squad passes both tests.</p>'}
     ${keep.length ? `<p class="keepers">Passing both tests: ${keep.map(p => `<b>${esc(p.n)}</b> ${f1(mv(p).a3)}`).join(' · ')}</p>` : ''}`;
+  renderPB();
 }
 
 document.addEventListener('click', e => {
@@ -3193,7 +3252,7 @@ document.addEventListener('click', e => {
   }
   savePlan(); draw(); document.dispatchEvent(new Event('planchange'));
 });
-window.FPLM = {teamFit, ticks, nTicks, rank, options, breakdown, fixtures, minutes, tickStrip, vsLine, mv};
+window.FPLM = {teamFit, ticks, nTicks, rank, options, breakdown, fixtures, minutes, tickStrip, vsLine, mv, renderPB};
 draw();
 })();
 """
@@ -3289,7 +3348,7 @@ let BASE = null;   // your player in the grid, for team-fit tags
 const ROWS = [
   ['Your tests', p => M().tickStrip(M().ticks(p, BASE && p.id !== BASE.id ? BASE : null), p), p => M().nTicks(M().ticks(p, BASE && p.id !== BASE.id ? BASE : null)), null],
   ['Last 3: points a week', p => `<b>${(mvv(p).a3 || 0).toFixed(1)}</b><small>${p.pos} bar ${D.bar[p.pos].toFixed(1)}</small>`, p => mvv(p).a3 || 0, (p, b) => [(mvv(p).a3 || 0) - (mvv(b).a3 || 0), 1, 'pts']],
-  ['Where those points came from', p => M().breakdown(p, 0), null, null],
+  ['Points by gameweek, by source', p => `<div class="pbx" data-id="${p.id}"></div>`, null, null],
   ['Minutes, last 3', p => M().minutes(p) + `<small>${mvv(p).mm}' a game, started ${mvv(p).st} of ${mvv(p).g3}</small>`, p => mvv(p).mm || 0, (p, b) => [(mvv(p).mm || 0) - (mvv(b).mm || 0), 0, 'min']],
   ['Next 5, for how he scores', p => `<span class="fx-l f-${mvv(p).sl}"><b>${mvv(p).sl}</b></span>` + M().fixtures(p), p => mvv(p).sv || 0, null],
   ['Team fit', p => { if (!BASE || p.id === BASE.id) return '<span class="mut">-</span>';
@@ -3374,6 +3433,7 @@ function draw(){
   $('#cmp-grid').innerHTML = `<div class="tw"><table class="ct" style="min-width:${minW}px"><thead><tr><th class="ct-l">
       <span class="lgx"><i class="f"></i>60+ <i class="p"></i>sub <i class="d"></i>DNP</span></th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   $('#cmp-verdict').innerHTML = verdict(ps);
+  M().renderPB();
 }
 
 function replacements(id){
