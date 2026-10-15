@@ -4,11 +4,14 @@ on:
   schedule:
     - cron: "17 11 * * *"   # every day around 7:17am Eastern
   workflow_dispatch:         # lets you hit "Run workflow" by hand
+  issues:                    # rebuild when you add, edit or close a watch-list pick
+    types: [opened, edited, closed, reopened]
   push:
     branches: [main]
 
 permissions:
   contents: write   # saves the predictions log back to the repo
+  issues: read      # the watch list lives in issues
   pages: write
   id-token: write
 
@@ -29,6 +32,7 @@ jobs:
         env:
           REPORT_PATH: site/index.html
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Save predictions log
         run: |
           git config user.name "fpl-report-bot"
