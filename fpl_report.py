@@ -3243,16 +3243,25 @@ function remove(id){
 function toggle(id){ picks.includes(+id) ? remove(id) : add(id); }
 
 // ---------- search
+// accent-blind, so "kadi" finds Kadıoğlu
+const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+// clubs for the dropdown, alphabetical
+$('#cmp-team').innerHTML = '<option value="">All clubs</option>' + Object.entries(D.teams)
+  .sort((a, b) => a[1].f.localeCompare(b[1].f)).map(([id, t]) => `<option value="${id}">${esc(t.f)}</option>`).join('');
 function results(){
-  const q = $('#cmp-q').value.trim().toLowerCase();
-  const pos = $('#cmp-pos').value, who = $('#cmp-who').value;
-  let rs = D.players.filter(p => (!pos || p.pos === pos) && (who === 'all' || (who === 'fa' && p.fa) || (who === 'mine' && p.mine))
-    && (!q || p.n.toLowerCase().includes(q) || p.tf.toLowerCase().includes(q) || p.t.toLowerCase().includes(q)));
-  rs.sort((a, b) => b.ppg - a.ppg);
-  rs = rs.slice(0, 8);
-  $('#cmp-res').innerHTML = rs.length ? rs.map(p => `<button class="cmp-r" data-id="${p.id}">${photo(p, 30)}
+  const q = fold($('#cmp-q').value.trim());
+  const pos = $('#cmp-pos').value, who = $('#cmp-who').value, team = $('#cmp-team').value;
+  let rs = D.players.filter(p => (!pos || p.pos === pos) && (!team || p.tid === +team)
+    && (who === 'all' || (who === 'fa' && p.fa) || (who === 'mine' && p.mine) || (who === 'other' && !p.fa && !p.mine))
+    && (!q || fold(p.n).includes(q) || fold(p.tf).includes(q) || fold(p.t).includes(q)));
+  const a3 = p => (p.mv && p.mv.a3) || 0;
+  // a club picked: show its whole squad, best recent form first, grouped by position; otherwise the top 8
+  if (team) rs.sort((a, b) => ['GK','DEF','MID','FWD'].indexOf(a.pos) - ['GK','DEF','MID','FWD'].indexOf(b.pos) || a3(b) - a3(a));
+  else { rs.sort((a, b) => a3(b) - a3(a) || b.ppg - a.ppg); rs = rs.slice(0, 8); }
+  const count = team ? `<p class="note" style="margin:0 0 6px;grid-column:1/-1">${rs.length} ${esc(D.teams[team].f)} player${rs.length === 1 ? '' : 's'}${who === 'fa' ? ' available' : ''}. Tap one to add him below.</p>` : '';
+  $('#cmp-res').innerHTML = rs.length ? count + rs.map(p => `<button class="cmp-r" data-id="${p.id}">${photo(p, 30)}
      <span><b>${esc(p.n)}</b><small>${badge(p.tid, 12)}${esc(p.t)} · ${p.pos} · ${esc(p.own)}</small></span>
-     <em>${p.ppg.toFixed(1)} pts/g</em></button>`).join('') : '<p class="empty">No players match.</p>';
+     <em>${a3(p).toFixed(1)} last 3</em></button>`).join('') : '<p class="empty">No players match.</p>';
 }
 
 // ---------- compare grid
@@ -3442,6 +3451,7 @@ function drawCands(){
 $('#cmp-q').addEventListener('input', results);
 $('#cmp-pos').addEventListener('change', results);
 $('#cmp-who').addEventListener('change', results);
+$('#cmp-team').addEventListener('change', results);
 $('#cmp-res').addEventListener('click', e => { const b = e.target.closest('.cmp-r'); if (b){ add(b.dataset.id); } });
 $('#cmp-grid').addEventListener('click', e => { const b = e.target.closest('.cx'); if (b) remove(b.dataset.id); });
 $('#cmp-cands').addEventListener('click', e => { const b = e.target.closest('.cand-btn'); if (b) toggle(b.dataset.id); });
@@ -3496,8 +3506,9 @@ Find replacements for the full list at his position. Green = best in that row.</
 <div class="cmp-row"><label>Find replacements for</label><select id="cmp-mine"></select>
 <button id="cmp-repl" class="sb on">Find replacements</button></div>
 <div class="cmp-row"><input id="cmp-q" type="search" placeholder="Search a player or club" autocomplete="off">
+<select id="cmp-team" aria-label="Club"></select>
 <select id="cmp-pos"><option value="">All positions</option><option>GK</option><option>DEF</option><option>MID</option><option>FWD</option></select>
-<select id="cmp-who"><option value="all">Everyone</option><option value="fa">Free agents only</option><option value="mine">My players</option></select></div>
+<select id="cmp-who"><option value="all">Everyone</option><option value="fa">Available (free agents)</option><option value="mine">My players</option><option value="other">Owned by others</option></select></div>
 <div id="cmp-res" class="cmp-res"></div></div>
 <div id="cmp-cands"></div>
 <div hidden><input id="cand-q"><select id="cand-sort"><option value="score">score</option><option value="ppg"></option>
