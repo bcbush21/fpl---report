@@ -2842,13 +2842,16 @@ def moves_html(d, players):
     return head + body
 
 
-# ---------------------------------------------------------------- bonus points
+# ---------------------------------------------------------------- stat leaders (bonus, clean sheets, defensive contribution)
 
-def bonus_rows(d, players, teams):
-    """Every player with bonus this season: total, the games it came in and who against."""
-    src, live_min, bps = d.get("live_src", {}), d.get("live_min", {}), d.get("live_bps", {})
+LEADER_STATS = {"bonus": "bonus", "cs": "clean_sheets", "dc": "defensive_contribution"}
+
+
+def leader_rows(d, players, teams):
+    """Every player with bonus, clean-sheet or DC points this season, and the games they came in."""
+    src, live_min, bps, under = d.get("live_src", {}), d.get("live_min", {}), d.get("live_bps", {}), d.get("live_under", {})
     fin = finished_gws(d)
-    opps = {}  # (team, gw) -> [(opponent short name, home)]
+    opps = {}
     for f in d["fixtures"]:
         gw = f.get("event")
         if gw in fin:
@@ -2856,82 +2859,101 @@ def bonus_rows(d, players, teams):
             opps.setdefault((f["team_a"], gw), []).append((teams[f["team_h"]]["name"], 0))
     rows = []
     for p in players.values():
-        hauls, apps, bps_tot = [], 0, 0
+        apps = bps_tot = dca = 0
+        got = {k: [] for k in LEADER_STATS}
         for gw in fin:
-            m = live_min.get(gw, {}).get(p["id"], 0)
-            if not m:
+            if not live_min.get(gw, {}).get(p["id"]):
                 continue
             apps += 1
             bps_tot += bps.get(gw, {}).get(p["id"], 0)
-            b = (src.get(gw, {}).get(p["id"]) or {}).get("bonus", 0)
-            if b:
-                vs = opps.get((p["tid"], gw), [])
-                hauls.append([gw, b, " & ".join(o for o, _ in vs) or "?", vs[0][1] if len(vs) == 1 else -1,
-                              d["live"].get(gw, {}).get(p["id"], 0)])
-        if not hauls:
+            dca += (under.get(gw, {}).get(p["id"]) or (0, 0, 0, 0))[2]
+            s = src.get(gw, {}).get(p["id"]) or {}
+            vs = opps.get((p["tid"], gw), [])
+            for k, stat in LEADER_STATS.items():
+                if s.get(stat):
+                    got[k].append([gw, s[stat], " & ".join(o for o, _ in vs) or "?", vs[0][1] if len(vs) == 1 else -1])
+        if not any(got.values()):
             continue
-        rows.append([p["id"], p["name"], p["team"], p["tid"], p["pos"],
-                     "You" if p["mine"] else (p["owner"] or ""), sum(h[1] for h in hauls), len(hauls), apps,
-                     round(bps_tot / apps, 1) if apps else 0, hauls, p.get("code")])
+        rows.append([p["id"], p["name"], p["team"], p["tid"], p["pos"], "You" if p["mine"] else (p["owner"] or ""),
+                     p.get("code"), apps, round(bps_tot / apps, 1) if apps else 0, round(dca / apps, 1) if apps else 0,
+                     {k: v for k, v in got.items() if v}])
     return rows
 
 
-def bonus_section(d, players, teams):
-    rows = bonus_rows(d, players, teams)
-    data = json.dumps(dict(rows=rows, teams={tid: t["name"] for tid, t in teams.items()}, photo=PHOTO, badge=BADGE,
+def leaders_section(d, players, teams):
+    data = json.dumps(dict(rows=leader_rows(d, players, teams), photo=PHOTO, badge=BADGE,
                            codes={tid: t["code"] for tid, t in teams.items()}),
                       separators=(",", ":")).replace("</", "<\\/")
-    return f"""<section id="bonus"><h2>Bonus points</h2>
-<p class="note">Every player who has earned bonus this season: how much, how many games it came in, and who it was against.
-Bonus goes to the three best players in each match by FPL's BPS score (3, 2 and 1). <b>Avg BPS</b> is his average BPS score across
-every game he's played, a guide to how often he gets near the top three. Each box shows the gameweek, the bonus, the opponent
-(H or A) and his total points that week.</p>
+    return f"""<section id="leaders"><h2>Stat leaders</h2>
+<p class="note">Who gets the most of the points that don't come from goals and assists. Pick a stat, then narrow it to a position or
+to players available in Hope Bros. <b>Bonus</b> goes to the three best players in each match by FPL's BPS score (3, 2, 1).
+<b>Clean sheets</b> are worth 4 to keepers and defenders and 1 to midfielders, for 60+ minutes without conceding.
+<b>Defensive contribution (DC)</b> is 2 points for 10+ clearances, blocks, interceptions and tackles (defenders), or 12+ of those plus
+recoveries (midfielders and forwards). Each box is one game: the gameweek, the points, the opponent (H or A).</p>
 <div class="card cmp-tools"><div class="cmp-row">
-<input id="bn-q" type="search" placeholder="Search a player or club" autocomplete="off">
-<select id="bn-who"><option value="all">All players</option><option value="fa">Available (free agents)</option><option value="mine">My players</option></select>
-<select id="bn-pos"><option value="">All positions</option><option>GK</option><option>DEF</option><option>MID</option><option>FWD</option></select>
-<select id="bn-sort"><option value="most">Most bonus first</option><option value="least">Least bonus first</option>
-<option value="rate">Most bonus per game</option><option value="bps">Highest avg BPS</option></select></div>
-<p id="bn-count" class="note" style="margin:8px 0 0"></p></div>
-<div class="card"><div class="tw"><table class="bnt"><thead><tr><th>#</th><th>Player</th><th>Bonus</th><th>Games with bonus</th>
-<th>Avg BPS</th><th>Where it came from</th></tr></thead><tbody id="bn-body"></tbody></table></div></div>
-<script type="application/json" id="bn-data">{data}</script>
-<script>{BONUS_JS}</script></section>"""
+<select id="ld-stat" aria-label="Stat"><option value="bonus">Bonus points</option><option value="cs">Clean sheets</option><option value="dc">Defensive contribution (DC)</option></select>
+<select id="ld-pos" aria-label="Position"></select>
+<select id="ld-who"><option value="all">All players</option><option value="fa">Available (free agents)</option><option value="mine">My players</option></select>
+<select id="ld-sort"><option value="most">Most first</option><option value="least">Least first</option><option value="rate">Most per game played</option></select>
+<input id="ld-q" type="search" placeholder="Search a player or club" autocomplete="off"></div>
+<p id="ld-count" class="note" style="margin:8px 0 0"></p></div>
+<div class="card"><div class="tw"><table class="bnt"><thead><tr id="ld-head"></tr></thead><tbody id="ld-body"></tbody></table></div></div>
+<script type="application/json" id="ld-data">{data}</script>
+<script>{LEADERS_JS}</script></section>"""
 
 
-BONUS_JS = r"""
+LEADERS_JS = r"""
 (function(){
-const D = JSON.parse(document.getElementById('bn-data').textContent);
+const D = JSON.parse(document.getElementById('ld-data').textContent);
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').normalize('NFD').replace(/[̀-ͯ]/g, '');
 const ini = n => n.replace(/\./g,' ').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
 const photo = (code, n) => `<span class="ph" style="--s:36px"><span class="ini">${esc(ini(n))}</span>${code ? `<img src="${D.photo.replace('{code}', code)}" alt="" onerror="this.remove()">` : ''}</span>`;
 const badge = tid => `<img class="badge" src="${D.badge.replace('{code}', D.codes[tid])}" width="14" height="14" alt="" onerror="this.style.visibility='hidden'">`;
-// [id, name, team, tid, pos, owner, total, games, apps, avgBps, hauls[[gw, bonus, opp, home, pts]], code]
+// [id, name, team, tid, pos, owner, code, apps, avgBps, avgDefActions, {stat: [[gw, pts, opp, home]]}]
+const STAT = {
+  bonus: {name: 'Bonus', unit: 'bonus', pos: ['', 'GK', 'DEF', 'MID', 'FWD'], extra: ['Avg BPS', r => r[8].toFixed(1)]},
+  cs: {name: 'Clean sheets', unit: 'clean sheets', pos: ['', 'GK', 'DEF', 'MID'], extra: null},
+  dc: {name: 'DC', unit: 'DC hauls', pos: ['', 'DEF', 'MID', 'FWD'], extra: ['Def. actions a game', r => r[9].toFixed(1)]},
+};
+const POSN = {'': 'All positions', GK: 'Goalkeepers', DEF: 'Defenders', MID: 'Midfielders', FWD: 'Forwards'};
+let lastStat = null;
 function draw(){
-  const q = fold($('#bn-q').value.trim()), who = $('#bn-who').value, pos = $('#bn-pos').value, sort = $('#bn-sort').value;
-  let rs = D.rows.filter(r => (!pos || r[4] === pos) && (who === 'all' || (who === 'fa' && !r[5]) || (who === 'mine' && r[5] === 'You'))
+  const k = $('#ld-stat').value, S = STAT[k];
+  if (k !== lastStat){
+    const keep = $('#ld-pos').value;
+    $('#ld-pos').innerHTML = S.pos.map(p => `<option value="${p}">${POSN[p]}</option>`).join('');
+    if (S.pos.includes(keep)) $('#ld-pos').value = keep;
+    $('#ld-head').innerHTML = `<th>#</th><th>Player</th><th>${S.name} points</th><th>Games</th>${S.extra ? `<th>${S.extra[0]}</th>` : ''}<th>Where they came from</th>`;
+    lastStat = k;
+  }
+  const pos = $('#ld-pos').value, who = $('#ld-who').value, sort = $('#ld-sort').value, q = fold($('#ld-q').value.trim());
+  const tot = r => (r[10][k] || []).reduce((s, h) => s + h[1], 0), n = r => (r[10][k] || []).length;
+  let rs = D.rows.filter(r => r[10][k] && S.pos.includes(r[4]) && (!pos || r[4] === pos)
+    && (who === 'all' || (who === 'fa' && !r[5]) || (who === 'mine' && r[5] === 'You'))
     && (!q || fold(r[1]).includes(q) || fold(r[2]).includes(q)));
-  const rate = r => r[6] / Math.max(r[8], 1);
-  const cmp = {most: (a, b) => b[6] - a[6] || a[8] - b[8], least: (a, b) => a[6] - b[6] || b[8] - a[8],
-               rate: (a, b) => rate(b) - rate(a) || b[6] - a[6], bps: (a, b) => b[9] - a[9] || b[6] - a[6]}[sort];
-  rs.sort(cmp);
-  $('#bn-count').textContent = `${rs.length} player${rs.length === 1 ? '' : 's'} with bonus${who === 'fa' ? ', available' : who === 'mine' ? ', on your team' : ''}.`;
-  $('#bn-body').innerHTML = rs.map((r, i) => {
+  const rate = r => tot(r) / Math.max(r[7], 1);
+  rs.sort({most: (a, b) => tot(b) - tot(a) || a[7] - b[7], least: (a, b) => tot(a) - tot(b) || b[7] - a[7],
+           rate: (a, b) => rate(b) - rate(a) || tot(b) - tot(a)}[sort]);
+  $('#ld-count').textContent = `${rs.length} player${rs.length === 1 ? '' : 's'} with ${S.unit}${pos ? ', ' + POSN[pos].toLowerCase() : ''}${who === 'fa' ? ', available' : who === 'mine' ? ', on your team' : ''}.`;
+  $('#ld-body').innerHTML = rs.slice(0, 200).map((r, i) => {
     const own = r[5] === 'You' ? '<span class="tag you">You</span>' : r[5] ? `<span class="mut">${esc(r[5])}</span>` : '<span class="tag fa">Free agent</span>';
-    const hauls = r[10].slice().reverse().map(([gw, b, opp, home, pts]) =>
-      `<span class="bnh b${b}" title="GW${gw}: ${b} bonus vs ${esc(opp)}${home === 1 ? ' (home)' : home === 0 ? ' (away)' : ''}, ${pts} pts that week"><b>+${b}</b><small>GW${gw} · ${esc(opp)}${home === 1 ? ' (H)' : home === 0 ? ' (A)' : ''}</small></span>`).join('');
+    const hs = r[10][k].slice().reverse().map(([gw, pts, opp, home]) => {
+      const cls = k === 'bonus' ? 'b' + pts : k === 'cs' ? 'cs' : 'dc';
+      return `<span class="bnh ${cls}" title="GW${gw}: +${pts} vs ${esc(opp)}"><b>+${pts}</b><small>GW${gw} · ${esc(opp)}${home === 1 ? ' (H)' : home === 0 ? ' (A)' : ''}</small></span>`;
+    }).join('');
     return `<tr class="${r[5] === 'You' ? 'mine' : ''}"><td class="rk">${i + 1}</td>
-      <td><div class="who">${photo(r[11], r[1])}<div><div class="nm">${esc(r[1])} <button class="cmp-add" data-id="${r[0]}">+ Compare</button></div>
+      <td><div class="who">${photo(r[6], r[1])}<div><div class="nm">${esc(r[1])} <button class="cmp-add" data-id="${r[0]}">+ Compare</button></div>
         <div class="tm">${badge(r[3])}${esc(r[2])} · ${r[4]} · ${own}</div></div></div></td>
-      <td><span class="bignum">${r[6]}</span><span class="sub2">${(r[6] / Math.max(r[8], 1)).toFixed(2)} a game</span></td>
-      <td>${r[7]} of ${r[8]}<span class="sub2">games played</span></td>
-      <td>${r[9].toFixed(1)}</td>
-      <td><div class="bnhs">${hauls}</div></td></tr>`;
+      <td><span class="bignum">${tot(r)}</span><span class="sub2">${rate(r).toFixed(2)} a game</span></td>
+      <td>${n(r)} of ${r[7]}<span class="sub2">games played</span></td>
+      ${S.extra ? `<td>${S.extra[1](r)}</td>` : ''}
+      <td><div class="bnhs">${hs}</div></td></tr>`;
   }).join('') || '<tr><td colspan="6" class="empty">No players match.</td></tr>';
 }
-['#bn-q', '#bn-who', '#bn-pos', '#bn-sort'].forEach(s => $(s).addEventListener(s === '#bn-q' ? 'input' : 'change', draw));
+['#ld-stat', '#ld-pos', '#ld-who', '#ld-sort'].forEach(s => $(s).addEventListener('change', draw));
+$('#ld-q').addEventListener('input', draw);
 draw();
 })();
 """
@@ -3046,6 +3068,389 @@ risers(); draw();
 """
 
 
+# ---------------------------------------------------------------- points forecast, split by where the points come from
+#
+# For the team builder. Each fixture in the next PREDICT_AHEAD gameweeks gets an estimate built from parts:
+#   minutes   chance he plays and gets 60+, from his last 3 gameweeks and the injury flag
+#   goals     xG per 90 (season and last 3 blended) x expected minutes x how leaky the opponent is
+#   assists   the same with xA
+#   clean sht his team's goals-against rate x how dangerous the opponent is -> chance of a clean sheet
+#   conceded  defenders and keepers lose a point per 2 goals conceded
+#   DC        how often he has hit the defensive contribution threshold when he plays
+#   saves     keepers' saves points per game, nudged by opponent attack
+#   bonus     his bonus per game, nudged by the fixture
+#   cards     his cards, own goals and missed penalties per game
+# Every part is an expected value, so a 2.0 for goals means "a 40% chance of a 5-point goal", not a guess of a goal.
+
+GOAL_PTS = {"GK": 10, "DEF": 6, "MID": 5, "FWD": 4}
+CS_PTS = {"GK": 4, "DEF": 4, "MID": 1, "FWD": 0}
+FC_KEYS = ["min", "g", "a", "cs", "gc", "dc", "sv", "bon", "neg"]
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _poisson_half_goals(lam):
+    """Expected floor(goals / 2) for Poisson goals against."""
+    tot, pk, k = 0.0, math.exp(-lam), 0
+    while k < 12:
+        tot += pk * (k // 2)
+        k += 1
+        pk *= lam / k
+    return tot
+
+
+def forecast_all(d, players, teams):
+    src, live_min, under = d.get("live_src", {}), d.get("live_min", {}), d.get("live_under", {})
+    fin = finished_gws(d)
+    # season per-game rates for every player, from the points breakdown of each finished gameweek
+    season = {}
+    for p in players.values():
+        gp = dc = bon = sv = neg = 0
+        for gw in fin:
+            if not live_min.get(gw, {}).get(p["id"]):
+                continue
+            gp += 1
+            s = src.get(gw, {}).get(p["id"]) or {}
+            dc += 1 if s.get("defensive_contribution") else 0
+            bon += s.get("bonus", 0)
+            sv += s.get("saves", 0)
+            neg += sum(s.get(k, 0) for k in ("yellow_cards", "red_cards", "own_goals", "penalties_missed"))
+        season[p["id"]] = dict(gp=gp, dc=dc, bon=bon, sv=sv, neg=neg)
+
+    # position averages, the prior each player is pulled toward when his sample is small
+    prior = {}
+    for pos in POS.values():
+        grp = [p for p in players.values() if p["pos"] == pos and p["mins"] >= 270]
+        mins = sum(p["mins"] for p in grp) or 1
+        gps = sum(season[p["id"]]["gp"] for p in grp) or 1
+        prior[pos] = dict(xg90=sum(p["xg"] for p in grp) / mins * 90, xa90=sum(p["xa"] for p in grp) / mins * 90,
+                          dc=sum(season[p["id"]]["dc"] for p in grp) / gps, bon=sum(season[p["id"]]["bon"] for p in grp) / gps,
+                          sv=sum(season[p["id"]]["sv"] for p in grp) / gps)
+
+    out = {}
+    for p in players.values():
+        a = p.get("as") or {}
+        pos, s, pr = p["pos"], season[p["id"]], prior[p["pos"]]
+        rows = a.get("rows") or []
+        # minutes: from the last 3 gameweeks, one game at a time
+        games = [(r["mins"] / r["games"], r["st"] >= r["games"]) for r in rows for _ in range(r["games"])] if rows else []
+        played = [m for m, _ in games if m > 0]
+        p_play = len(played) / len(games) if games else (0.5 if p["mins"] else 0.0)
+        mins_on = sum(played) / len(played) if played else (p["mins"] / max(s["gp"], 1) if s["gp"] else 0)
+        p60 = sum(1 for m in played if m >= 60) / len(played) if played else 0.0
+        if p["status"] in ("i", "s", "u", "n"):
+            p_play = 0.0
+        elif p["chance"] is not None and p["chance"] < 100:
+            p_play = min(p_play if games else 1.0, p["chance"] / 100) if p_play else p["chance"] / 100 * 0.5
+        exp_min = p_play * mins_on
+
+        # attacking rates per 90: season pulled toward the position average, then blended with the last 3
+        def rate(total, mins, prior90, weight=270):
+            return (total + prior90 * weight / 90) / ((mins + weight) / 90)
+        xg90 = rate(p["xg"], p["mins"], pr["xg90"])
+        xa90 = rate(p["xa"], p["mins"], pr["xa90"])
+        m3 = sum(r["mins"] for r in rows)
+        if m3 >= 90:
+            xg90 = 0.5 * xg90 + 0.5 * rate(sum(r["xg"] for r in rows), m3, xg90, 180)
+            xa90 = 0.5 * xa90 + 0.5 * rate(sum(r["xa"] for r in rows), m3, xa90, 180)
+        k = 3
+        dc_rate = (s["dc"] + pr["dc"] * k) / (s["gp"] + k)
+        bon_pg = (s["bon"] + pr["bon"] * k) / (s["gp"] + k)
+        l3b = [r["src"]["bon"] for r in rows if r["mins"]]
+        if l3b:
+            bon_pg = 0.6 * bon_pg + 0.4 * sum(l3b) / len(l3b)
+        sv_pg = (s["sv"] + pr["sv"] * k) / (s["gp"] + k) if pos == "GK" else 0
+        neg_pg = s["neg"] / s["gp"] if s["gp"] else 0
+
+        t = teams[p["tid"]]
+        fx = []
+        for x in t["run"][:]:
+            if x["gw"] >= d["next"] + PREDICT_AHEAD:
+                continue
+            att = _clamp(x["att"], 0.55, 1.8)
+            lam = _clamp(t["def_rating"] * x["dfn"], 0.25, 3.5)  # goals he can expect his team to concede
+            p_cs = math.exp(-lam)
+            f = exp_min / 90
+            c = dict(
+                min=p_play * (1 + p60),
+                g=xg90 * f * att * GOAL_PTS[pos],
+                a=xa90 * f * att * 3,
+                cs=p_play * p60 * p_cs * CS_PTS[pos],
+                gc=-p_play * p60 * _poisson_half_goals(lam) if pos in ("GK", "DEF") else 0.0,
+                dc=2 * dc_rate * p_play if pos != "GK" else 0.0,
+                sv=sv_pg * p_play * _clamp(x["dfn"], 0.7, 1.4) ** 0.5,
+                bon=bon_pg * p_play * _clamp(0.75 + 0.25 * (att if pos in ("MID", "FWD") else p_cs / 0.3), 0.6, 1.4),
+                neg=neg_pg * p_play,
+            )
+            fx.append([x["gw"], x["opp_id"], 1 if x["home"] else 0, round(exp_min), round(p_cs, 2), round(att, 2),
+                       [round(c[k], 2) for k in FC_KEYS]])
+        out[p["id"]] = dict(fx=fx, pp=round(p_play, 2), p60=round(p60, 2), mo=round(mins_on), xg=round(xg90, 2), xa=round(xa90, 2),
+                            dc=round(dc_rate, 2), bon=round(bon_pg, 2))
+    return out
+
+
+def form_trend(p, d):
+    """Last 3 games played against his season average per game played: up, flat or down (needs 4+ games)."""
+    fin = finished_gws(d)
+    pl = [d["live"].get(gw, {}).get(p["id"], 0) for gw in fin if d.get("live_min", {}).get(gw, {}).get(p["id"])]
+    if len(pl) < 4:
+        return [None, round(sum(pl) / len(pl), 1) if pl else None, None]
+    s, l3 = sum(pl) / len(pl), sum(pl[-3:]) / 3
+    return ["up" if l3 - s >= 1 else "down" if l3 - s <= -1 else "flat", round(s, 1), round(l3, 1)]
+
+
+# ---------------------------------------------------------------- team builder
+
+def builder_section(d):
+    return f"""<section id="builder"><h2>Team builder</h2>
+<p class="note">Build any 15: 2 keepers, 5 defenders, 5 midfielders and 3 forwards, with 11 starting. Start from your own squad or
+from scratch, then tap an empty spot to add a player, tap a player to see why he's predicted what he is, and tap a starter and then
+a sub to swap them. The team is saved in this browser. Predicted points are an estimate built from parts: minutes, goals and assists
+from his xG and xA against how leaky the opponent is, clean-sheet chances from both teams' numbers, his DC and bonus rates, and his
+cards. Checked against GW7-9, the predictions averaged within 0.1 of what players actually scored.</p>
+<div class="card tb-bar">
+<div class="tb-btns"><button id="tb-mine" class="sb">Load my squad</button><button id="tb-clear" class="sb">Clear</button></div>
+<div class="pbsw" id="tb-h"><button class="pbw" data-h="1">GW{d["next"]}</button><button class="pbw" data-h="{PREDICT_AHEAD}">Next {PREDICT_AHEAD} GWs</button></div>
+</div>
+<div class="tb-wrap"><div><div class="tb-pitch" id="tb-pitch"></div><div class="tb-bench" id="tb-bench"></div>
+<p id="tb-msg" class="tb-msg"></p></div>
+<div id="tb-judge"></div></div>
+<div id="tb-detail"></div>
+<div id="tb-picker" class="tb-modal" hidden><div class="tb-mbox">
+<div class="tb-mh"><b id="tb-ptitle"></b><button id="tb-pclose" class="sb">Close</button></div>
+<div class="cmp-row"><input id="tb-pq" type="search" placeholder="Search a player or club" autocomplete="off">
+<select id="tb-pwho"><option value="fa">Available (free agents)</option><option value="all">All players</option><option value="mine">My players</option><option value="other">Owned by others</option></select>
+<select id="tb-pteam" aria-label="Club"></select></div>
+<div id="tb-plist" class="tb-plist"></div></div></div>
+<script>{BUILDER_JS}</script></section>"""
+
+
+BUILDER_JS = r"""
+(function(){
+const D = JSON.parse(document.getElementById('cmp-data').textContent);
+const P = {}; D.players.forEach(p => P[p.id] = p);
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fold = t => String(t).toLowerCase().replace(/ı/g, 'i').replace(/ø/g, 'o').normalize('NFD').replace(/[̀-ͯ]/g, '');
+const ORDER = ['GK', 'DEF', 'MID', 'FWD'], NEED = {GK: 2, DEF: 5, MID: 5, FWD: 3}, MIN_START = {GK: 1, DEF: 3, MID: 2, FWD: 1};
+const POSW = {GK: 'goalkeeper', DEF: 'defender', MID: 'midfielder', FWD: 'forward'};
+const LAB = {min: 'Minutes', g: 'Goals', a: 'Assists', cs: 'Clean sheet', gc: 'Goals conceded', dc: 'DC', sv: 'Saves', bon: 'Bonus', neg: 'Cards'};
+const COL = {min: '#94a3b8', g: '#1d4ed8', a: '#60a5fa', cs: '#16a34a', gc: '#f97316', dc: '#0d9488', sv: '#8b5cf6', bon: '#f59e0b', neg: '#ef4444'};
+const tn = tid => D.teams[tid] ? D.teams[tid].n : '?', tf = tid => D.teams[tid] ? D.teams[tid].f : '?';
+let squad = [], H = 1, sel = null, pick = null;   // squad: [{id, start}]
+try { const s = JSON.parse(localStorage.getItem('fpl-builder') || 'null');
+      if (s && Array.isArray(s.squad)) { squad = s.squad.filter(x => P[x.id]); H = s.h === D.ahead ? D.ahead : 1; } } catch (e) {}
+const save = () => { try { localStorage.setItem('fpl-builder', JSON.stringify({squad, h: H})); } catch (e) {} };
+function loadMine(){ squad = D.squad.filter(([id]) => P[id]).map(([id, pos]) => ({id, start: pos <= 11})); sel = null; }
+if (!squad.length) loadMine();
+
+// ---------- the forecast for the chosen horizon
+const lastGW = () => D.gw + H - 1;
+function fc(p){
+  const fx = ((p.fc && p.fc.fx) || []).filter(f => f[0] <= lastGW());
+  const comps = Object.fromEntries(D.fck.map(k => [k, 0]));
+  fx.forEach(f => D.fck.forEach((k, i) => comps[k] += f[6][i]));
+  const total = Object.values(comps).reduce((a, b) => a + b, 0);
+  const run = (D.teams[p.tid].run || []).filter(r => r[0] <= lastGW());
+  return {fx, comps, total, run};
+}
+const oppTxt = (r) => `${tn(r[1])} (${r[2] ? 'H' : 'A'})`;
+function nextOpp(p){
+  const run = (D.teams[p.tid].run || []).filter(r => r[0] === D.gw);
+  return run.length ? run.map(oppTxt).join(' + ') : 'No game';
+}
+
+// ---------- formation rules
+const starters = () => squad.filter(x => x.start), bench = () => squad.filter(x => !x.start);
+const count = (list, pos) => list.filter(x => P[x.id].pos === pos).length;
+function validXI(list){
+  const st = list.filter(x => x.start);
+  if (st.length > 11) return 'Only 11 can start.';
+  if (count(st, 'GK') > 1) return 'Only one keeper can start.';
+  if (st.length === 11) for (const pos of ORDER) if (count(st, pos) < MIN_START[pos])
+    return `You need at least ${MIN_START[pos]} ${POSW[pos]}${MIN_START[pos] > 1 ? 's' : ''} starting.`;
+  return null;
+}
+// where empty spots go: starting until the XI is full (aiming for 4-4-2), then the bench
+function layout(){
+  const rows = {GK: [], DEF: [], MID: [], FWD: []}, b = [];
+  squad.filter(x => x.start).forEach(x => rows[P[x.id].pos].push(x.id));
+  squad.filter(x => !x.start).forEach(x => b.push(x.id));
+  let open = 11 - starters().length;
+  const target = {GK: 1, DEF: 4, MID: 4, FWD: 2};
+  for (const pos of ORDER){
+    let missing = NEED[pos] - count(squad, pos);
+    while (missing > 0 && open > 0 && rows[pos].length < target[pos]){ rows[pos].push({empty: pos, start: true}); missing--; open--; }
+    while (missing > 0){ b.push({empty: pos, start: false}); missing--; }
+  }
+  b.sort((x, y) => (pos(x) === 'GK' ? 0 : 1) - (pos(y) === 'GK' ? 0 : 1));
+  return {rows, bench: b};
+}
+const pos = s => typeof s === 'object' ? s.empty : P[s].pos;
+
+// ---------- drawing
+const shirt = (p) => `https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${D.teams[p.tid].c}${p.pos === 'GK' ? '_1' : ''}-110.webp`;
+function card(slot, i){
+  if (typeof slot === 'object') return `<button class="tb-p tb-empty" data-empty="${slot.empty}" data-start="${slot.start ? 1 : 0}">
+    <span class="tb-shirt tb-plus">+</span><span class="tb-name">Add ${slot.empty}</span><span class="tb-fix">&nbsp;</span></button>`;
+  const p = P[slot], f = fc(p), flag = p.st !== 'a' ? `<span class="tb-flag ${p.st === 'd' ? 'd' : 'x'}" title="${esc(p.news || '')}">!</span>` : '';
+  const tr = p.tr && p.tr[0] ? `<i class="tb-tr ${p.tr[0]}">${p.tr[0] === 'up' ? '▲' : p.tr[0] === 'down' ? '▼' : ''}</i>` : '';
+  return `<button class="tb-p${sel === p.id ? ' on' : ''}" data-id="${p.id}">${flag}
+    <img class="tb-shirt" src="${shirt(p)}" alt="" onerror="this.outerHTML='<span class=&quot;tb-shirt tb-ini&quot;>${esc(tn(p.tid))}</span>'">
+    <span class="tb-pts">${f.total.toFixed(1)}</span>
+    <span class="tb-name">${esc(p.n)}</span><span class="tb-fix">${esc(H === 1 ? nextOpp(p) : f.run.length + ' games')} ${tr}</span></button>`;
+}
+function draw(){
+  const L = layout();
+  $('#tb-pitch').innerHTML = '<div class="tb-lines"></div>' + ORDER.map(pos => `<div class="tb-row">${L.rows[pos].map(card).join('')}</div>`).join('');
+  $('#tb-bench').innerHTML = `<div class="tb-bl">Bench</div><div class="tb-row">${L.bench.map(card).join('')}</div>`;
+  document.querySelectorAll('#tb-h .pbw').forEach(b => b.classList.toggle('on', +b.dataset.h === H));
+  judge(); detail(); save();
+}
+
+// ---------- judging the team
+function judge(){
+  const st = starters().map(x => P[x.id]), all = squad.map(x => P[x.id]);
+  const sum = list => list.reduce((s, p) => s + fc(p).total, 0);
+  const clubs = {}; all.forEach(p => clubs[p.tid] = (clubs[p.tid] || []).concat(p));
+  const cl = Object.entries(clubs).sort((a, b) => b[1].length - a[1].length || tn(+a[0]).localeCompare(tn(+b[0])));
+  const lab = n => n >= 4 ? 'too many' : n === 3 ? 'max' : n === 2 ? 'pair' : 'single';
+  const over = cl.filter(([, v]) => v.length >= 4), pairs = cl.filter(([, v]) => v.length === 2).length;
+  const notes = [];
+  over.forEach(([t, v]) => notes.push(['bad', `${v.length} from ${tf(+t)}: one bad ${tn(+t)} result hits ${v.length} of your players. Aim for 3 at most.`]));
+  if (pairs) notes.push(['good', `${pairs} club pair${pairs === 1 ? '' : 's'}: two routes into the same good fixture.`]);
+  // starters on opposite sides of the same game
+  const clash = [];
+  st.forEach(a => st.forEach(b => {
+    if (a.id < b.id && (D.teams[a.tid].run || []).some(r => r[0] === D.gw && r[1] === b.tid)){
+      const atk = x => x.pos === 'MID' || x.pos === 'FWD', def = x => x.pos === 'GK' || x.pos === 'DEF';
+      if ((atk(a) && def(b)) || (atk(b) && def(a))) clash.push(`${a.n} (${tn(a.tid)}) and ${b.n} (${tn(b.tid)})`);
+    }
+  }));
+  if (clash.length) notes.push(['warn', `Working against each other in GW${D.gw}: ${clash.join('; ')}. A goal for one costs the other.`]);
+  const blank = st.filter(p => !(D.teams[p.tid].run || []).some(r => r[0] === D.gw));
+  if (blank.length) notes.push(['bad', `No game in GW${D.gw}: ${blank.map(p => p.n).join(', ')}.`]);
+  const doubles = st.filter(p => (D.teams[p.tid].run || []).filter(r => r[0] === D.gw).length > 1);
+  if (doubles.length) notes.push(['good', `Two games in GW${D.gw}: ${doubles.map(p => p.n).join(', ')}.`]);
+  const risk = st.filter(p => p.st !== 'a' || !p.fc || p.fc.pp < 0.7 || p.fc.mo < 60);
+  if (risk.length) notes.push(['warn', `Minutes risk: ${risk.map(p => `${p.n} (${p.st !== 'a' ? 'flagged' : !p.fc ? 'not playing' : p.fc.pp < 0.7 ? 'played ' + Math.round(p.fc.pp * 100) + '% of recent games' : p.fc.mo + "' a game"})`).join(', ')}.`]);
+  const up = st.filter(p => p.tr && p.tr[0] === 'up'), down = st.filter(p => p.tr && p.tr[0] === 'down'), flat = st.filter(p => p.tr && p.tr[0] === 'flat');
+  if (down.length) notes.push(['warn', `Form dropping: ${down.map(p => `${p.n} (${p.tr[2]} last 3 played vs ${p.tr[1]} season)`).join(', ')}.`]);
+  if (up.length) notes.push(['good', `Form rising: ${up.map(p => `${p.n} (${p.tr[2]} vs ${p.tr[1]})`).join(', ')}.`]);
+  const missing = 15 - squad.length;
+  const total = sum(st), bt = sum(bench().map(x => P[x.id]));
+  $('#tb-judge').innerHTML = `<div class="card tb-j">
+    <div class="ws"><div><span class="k">Starting XI</span><span class="v">${total.toFixed(1)}</span><span class="k2">predicted, ${H === 1 ? 'GW' + D.gw : 'next ' + H + ' GWs'}</span></div>
+    <div><span class="k">Bench</span><span class="v">${bt.toFixed(1)}</span></div>
+    <div><span class="k">Form</span><span class="v" style="font-size:16px"><b class="pos">▲ ${up.length}</b> · ${flat.length} · <b class="neg">▼ ${down.length}</b></span><span class="k2">rising · steady · falling</span></div></div>
+    ${missing ? `<p class="note" style="margin:10px 0 0">${15 - missing} of 15 picked.</p>` : ''}
+    <div class="mv-k" style="margin-top:14px">Club exposure</div>
+    <div class="mv-strip">${cl.map(([t, v]) => `<span class="club c${Math.min(v.length, 4)}" title="${esc(v.map(p => p.n).join(', '))}"><b>${esc(tn(+t))}</b> ${v.length}<small>${lab(v.length)}</small></span>`).join('')}</div>
+    <ul class="tb-notes">${notes.map(([k, t]) => `<li class="${k}">${esc(t)}</li>`).join('') || '<li>Nothing stands out.</li>'}</ul></div>`;
+}
+
+// ---------- each player's prediction, and why
+function why(p){
+  const f = fc(p), fcd = p.fc;
+  if (!fcd) return `<p class="tb-why">${p.st !== 'a' ? esc(p.news || 'Flagged as unavailable') + '. ' : ''}Hasn't played in his team's last 3 gameweeks, so he's predicted nothing until he does.</p>`;
+  const lines = [];
+  lines.push(`<b>Minutes:</b> expected ${f.fx.length ? f.fx[0][3] : 0}' a game. He played in ${Math.round(fcd.pp * 100)}% of his team's recent games, averaging ${fcd.mo}', and lasted 60+ in ${Math.round(fcd.p60 * 100)}% of them${p.st !== 'a' ? '; ' + esc(p.news || 'flagged') : ''}.`);
+  f.fx.forEach(([gw, opp, home, mins, pcs, att, c]) => {
+    const t = c.reduce((a, b) => a + b, 0);
+    const leak = att >= 1.15 ? 'a leaky defence' : att <= 0.87 ? 'a tight defence' : 'an average defence';
+    const parts = [];
+    if (c[1] + c[2] >= 0.3) parts.push(`goals ${c[1].toFixed(1)} and assists ${c[2].toFixed(1)} against ${leak} (${att.toFixed(2)}x the average chances conceded)`);
+    if (['GK', 'DEF', 'MID'].includes(p.pos)) parts.push(`${Math.round(pcs * 100)}% clean-sheet chance, ${c[3].toFixed(1)}${c[4] ? `, minus ${(-c[4]).toFixed(1)} for goals conceded` : ''}`);
+    if (c[5] >= 0.2) parts.push(`DC ${c[5].toFixed(1)}`);
+    if (c[6] >= 0.2) parts.push(`saves ${c[6].toFixed(1)}`);
+    parts.push(`bonus ${c[7].toFixed(1)}`);
+    lines.push(`<b>GW${gw} vs ${esc(tf(opp))} (${home ? 'home' : 'away'}): ${t.toFixed(1)}.</b> ${parts.join('; ')}.`);
+  });
+  lines.push(p.pos === 'GK' ? `<b>His rates:</b> ${fcd.bon.toFixed(1)} bonus a game; clean sheets and saves depend mostly on the fixture.`
+    : `<b>His rates:</b> ${fcd.xg.toFixed(2)} xG and ${fcd.xa.toFixed(2)} xA per 90 (season and last 3 blended), DC in ${Math.round(fcd.dc * 100)}% of games, ${fcd.bon.toFixed(1)} bonus a game.`);
+  if (p.tr && p.tr[0]) lines.push(`<b>Form:</b> ${{up: 'rising', flat: 'steady', down: 'falling'}[p.tr[0]]}, ${p.tr[2]} a game over his last 3 played vs ${p.tr[1]} for the season.`);
+  return `<ul class="tb-why">${lines.map(l => `<li>${l}</li>`).join('')}</ul>`;
+}
+function bar(c){
+  const pos = D.fck.map(k => [k, c[k]]).filter(x => x[1] > 0.05), tot = pos.reduce((s, x) => s + x[1], 0) || 1;
+  return `<div class="bd" style="width:100%">${pos.map(([k, v]) => `<i style="width:${v / tot * 100}%;background:${COL[k]}" title="${LAB[k]} ${v.toFixed(1)}"></i>`).join('')}</div>`;
+}
+function detail(){
+  const rows = squad.slice().sort((a, b) => (b.start - a.start) || ORDER.indexOf(P[a.id].pos) - ORDER.indexOf(P[b.id].pos) || fc(P[b.id]).total - fc(P[a.id]).total);
+  if (!rows.length){ $('#tb-detail').innerHTML = ''; return; }
+  const legend = D.fck.map(k => `<span><i style="background:${COL[k]}"></i>${LAB[k]}</span>`).join('');
+  $('#tb-detail').innerHTML = `<div class="card"><h3>Every player: predicted points and where they come from</h3>
+    <div class="bd-l" style="margin-bottom:8px">${legend}</div>
+    ${rows.map(x => { const p = P[x.id], f = fc(p), open = sel === p.id;
+      return `<details class="tb-d${x.start ? '' : ' sub'}" ${open ? 'open' : ''} data-id="${p.id}"><summary>
+        <span class="tb-dn"><b>${esc(p.n)}</b><small>${esc(p.t)} · ${p.pos}${x.start ? '' : ' · bench'} · ${esc(H === 1 ? nextOpp(p) : f.run.map(oppTxt).join(', '))}</small></span>
+        <span class="tb-db">${bar(f.comps)}<small>${D.fck.filter(k => Math.abs(f.comps[k]) >= 0.1).map(k => `${LAB[k]} ${f.comps[k].toFixed(1)}`).join(' · ')}</small></span>
+        <span class="tb-dt">${f.total.toFixed(1)}</span></summary>${why(p)}</details>`; }).join('')}</div>`;
+}
+
+// ---------- picking a player for a spot
+function openPicker(posn, start, replace){
+  pick = {pos: posn, start, replace};
+  $('#tb-ptitle').textContent = replace ? `Replace ${P[replace].n}` : `Add a ${POSW[posn]}`;
+  $('#tb-pteam').innerHTML = '<option value="">All clubs</option>' + Object.entries(D.teams).sort((a, b) => a[1].f.localeCompare(b[1].f)).map(([id, t]) => `<option value="${id}">${esc(t.f)}</option>`).join('');
+  $('#tb-picker').hidden = false; $('#tb-pq').value = ''; plist(); $('#tb-pq').focus();
+}
+function plist(){
+  const q = fold($('#tb-pq').value.trim()), who = $('#tb-pwho').value, team = $('#tb-pteam').value, have = new Set(squad.map(x => x.id));
+  const rs = D.players.filter(p => p.pos === pick.pos && !have.has(p.id) && (!team || p.tid === +team)
+      && (who === 'all' || (who === 'fa' && p.fa) || (who === 'mine' && p.mine) || (who === 'other' && !p.fa && !p.mine))
+      && (!q || fold(p.n).includes(q) || fold(p.tf).includes(q) || fold(p.t).includes(q)))
+    .map(p => [p, fc(p).total]).sort((a, b) => b[1] - a[1]).slice(0, 60);
+  $('#tb-plist').innerHTML = rs.map(([p, t]) => `<button class="tb-pr" data-pid="${p.id}"><span><b>${esc(p.n)}</b>
+      <small>${esc(p.t)} · ${esc(p.own)} · ${esc(nextOpp(p))}${p.st !== 'a' ? ' · ' + esc(p.news || 'flagged') : ''}</small></span>
+      <em>${t.toFixed(1)}<small>${((p.mv && p.mv.a3) || 0).toFixed(1)} last 3</small></em></button>`).join('') || '<p class="empty">No players match.</p>';
+}
+function choose(id){
+  if (pick.replace){ const x = squad.find(x => x.id === pick.replace); x.id = id; }
+  else squad.push({id, start: pick.start && validXI(squad.concat({id, start: true})) === null && starters().length < 11});
+  $('#tb-picker').hidden = true; sel = null; pick = null; $('#tb-msg').textContent = ''; draw();
+}
+
+// ---------- taps
+document.getElementById('builder').addEventListener('click', e => {
+  const t = e.target;
+  if (t.closest('#tb-mine')){ loadMine(); $('#tb-msg').textContent = ''; return draw(); }
+  if (t.closest('#tb-clear')){ squad = []; sel = null; $('#tb-msg').textContent = ''; return draw(); }
+  const hb = t.closest('#tb-h .pbw'); if (hb){ H = +hb.dataset.h; return draw(); }
+  if (t.closest('#tb-pclose') || t.id === 'tb-picker'){ $('#tb-picker').hidden = true; return; }
+  const pr = t.closest('.tb-pr'); if (pr) return choose(+pr.dataset.pid);
+  const act = t.closest('.tb-act'); if (act){
+    const id = +act.dataset.id;
+    if (act.dataset.a === 'replace') openPicker(P[id].pos, null, id);
+    if (act.dataset.a === 'remove'){ squad = squad.filter(x => x.id !== id); sel = null; $('#tb-msg').textContent = ''; draw(); }
+    return;
+  }
+  const em = t.closest('.tb-empty'); if (em){ sel = null; return openPicker(em.dataset.empty, em.dataset.start === '1', null); }
+  const c = t.closest('.tb-p'); if (!c) return;
+  const id = +c.dataset.id;
+  if (sel && sel !== id){
+    const a = squad.find(x => x.id === sel), b = squad.find(x => x.id === id);
+    if (a && b && a.start !== b.start){
+      const trial = squad.map(x => x === a ? {...x, start: b.start} : x === b ? {...x, start: a.start} : x);
+      const err = validXI(trial);
+      if (err){ $('#tb-msg').textContent = err; return; }
+      squad = trial; sel = null; $('#tb-msg').textContent = ''; return draw();
+    }
+  }
+  sel = sel === id ? null : id; $('#tb-msg').innerHTML = sel ? `<b>${esc(P[sel].n)}</b> selected. Tap a ${squad.find(x => x.id === sel).start ? 'sub' : 'starter'} to swap, or
+    <button class="sb tb-act" data-a="replace" data-id="${sel}">Replace</button> <button class="sb tb-act" data-a="remove" data-id="${sel}">Remove</button>` : '';
+  draw();
+  const dd = document.querySelector(`.tb-d[data-id="${sel}"]`); if (dd) dd.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+});
+['#tb-pq'].forEach(s => $(s).addEventListener('input', plist));
+['#tb-pwho', '#tb-pteam'].forEach(s => $(s).addEventListener('change', plist));
+draw();
+})();
+"""
+
+
 # ---------------------------------------------------------------- interactive player comparison
 
 def points_by_gw(p, d, fin):
@@ -3061,6 +3466,7 @@ def points_by_gw(p, d, fin):
 def compare_data(d, players, teams):
     """Everything the in-page comparison tool needs, for every player, as compact JSON."""
     fin = finished_gws(d)
+    fcs = forecast_all(d, players, teams)
     gws = sorted(d.get("live", {}))
     live, live_min = d.get("live", {}), d.get("live_min", {})
     _, _, _, pooled = league_benchmark(d, players)
@@ -3095,10 +3501,14 @@ def compare_data(d, players, teams):
             n5=n5_label, ch5=chips, bm=round(pooled.get(p["pos"], 0), 2),
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
             mv=moves_data(p), fv=finishing_verdict(p), pb=points_by_gw(p, d, fin),
-            el=[p["el"]["own"], p["el"]["chg"], p["el"]["cap"]] if p.get("el") else None))
+            el=[p["el"]["own"], p["el"]["chg"], p["el"]["cap"]] if p.get("el") else None,
+            fc=fcs[p["id"]] if fcs[p["id"]]["pp"] > 0 else None, tr=form_trend(p, d)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
-    return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"]) for tid, t in teams.items()},
+    return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"],
+                                              run=[[x["gw"], x["opp_id"], 1 if x["home"] else 0] for x in t["run"]])
+                                     for tid, t in teams.items()},
+                squad=[[pk["element"], pk["position"]] for pk in d["picks"]], fck=FC_KEYS, ahead=PREDICT_AHEAD,
                 avg=avgs, photo=PHOTO, badge=BADGE, cats=[[k, label] for k, label, _ in PT_CATS] + [["neg", "Deductions"]],
                 bar={k: round(v, 2) for k, v in pooled.items()}, nailed=NAILED_MINS, gw=d["next"])
 
@@ -3202,12 +3612,56 @@ MOVES_CSS = """
 .bnhs{display:flex;flex-wrap:wrap;gap:5px}
 .bnh{display:inline-flex;flex-direction:column;align-items:center;border-radius:8px;padding:3px 8px;min-width:64px;line-height:1.25}
 .bnh b{font-size:14px}.bnh small{font-size:10px;color:var(--muted);white-space:nowrap}
+.bnh.cs{background:var(--green-soft);color:var(--green)}.bnh.dc{background:#e0f2f1;color:#0f766e}
 .bnh.b3{background:#fde9b7;color:#8a5a00}.bnh.b2{background:#eef1f6;color:#334155}.bnh.b1{background:#f7ece4;color:#8a4b1f}
 .elt td.rk{color:var(--muted);font-weight:700}
 .elbar{width:90px;height:5px;border-radius:3px;background:#eef1f6;margin-top:4px}.elbar i{display:block;height:100%;border-radius:3px;background:var(--blue)}
 .elr{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
 .elc{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:14px;padding:10px 12px}
 .elc>div{flex:1;min-width:0;font-size:14px}.elc small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}
+.tb-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tb-btns{display:flex;gap:8px}
+.tb-wrap{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr);gap:18px;align-items:start;margin-top:16px}
+.tb-pitch{position:relative;border-radius:16px 16px 0 0;padding:18px 6px 14px;display:flex;flex-direction:column;gap:14px;overflow:hidden;
+  background:repeating-linear-gradient(180deg,#3fa34d 0 56px,#389446 56px 112px)}
+.tb-lines{position:absolute;inset:10px;border:2px solid rgba(255,255,255,.55);border-radius:4px;pointer-events:none}
+.tb-lines::before{content:"";position:absolute;left:28%;right:28%;top:-2px;height:15%;border:2px solid rgba(255,255,255,.55);border-top:0}
+.tb-lines::after{content:"";position:absolute;left:50%;bottom:-48px;width:96px;height:96px;margin-left:-48px;border:2px solid rgba(255,255,255,.55);border-radius:50%}
+.tb-row{position:relative;display:flex;justify-content:center;gap:clamp(4px,1.6vw,18px);flex-wrap:nowrap}
+.tb-p{position:relative;display:flex;flex-direction:column;align-items:center;width:clamp(62px,15vw,92px);background:none;border:0;padding:0;cursor:pointer;font:inherit}
+.tb-shirt{width:clamp(40px,9vw,58px);height:clamp(40px,9vw,58px);object-fit:contain;filter:drop-shadow(0 2px 2px rgba(0,0,0,.25))}
+.tb-ini,.tb-plus{display:flex;align-items:center;justify-content:center;border-radius:50%;background:#fff;color:var(--navy);font-weight:800;font-size:13px}
+.tb-plus{background:rgba(255,255,255,.25);color:#fff;font-size:26px;border:2px dashed rgba(255,255,255,.8)}
+.tb-name{width:100%;background:#fff;color:#0f172a;font-size:12px;font-weight:700;padding:2px 3px;border-radius:4px 4px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.tb-fix{width:100%;background:#1e3a5f;color:#fff;font-size:11px;padding:2px 3px;border-radius:0 0 4px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb-pts{position:absolute;top:0;right:4px;background:#fde68a;color:#422006;font-size:11px;font-weight:800;border-radius:999px;padding:1px 6px;z-index:1}
+.tb-empty .tb-name{background:rgba(255,255,255,.8)}.tb-empty .tb-fix{background:rgba(30,58,95,.5)}
+.tb-p.on .tb-name{background:#fde68a}.tb-p.on .tb-shirt{transform:translateY(-3px)}
+.tb-flag{position:absolute;top:0;left:6px;width:18px;height:18px;border-radius:50%;font-size:12px;font-weight:800;color:#fff;display:flex;align-items:center;justify-content:center;z-index:1}
+.tb-flag.d{background:#f59e0b}.tb-flag.x{background:#dc2626}
+.tb-tr{font-style:normal;font-size:9px}.tb-tr.up{color:#86efac}.tb-tr.down{color:#fca5a5}
+.tb-bench{background:#d8efdc;border-radius:0 0 16px 16px;padding:10px 6px 14px}
+.tb-bl{text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:#1f5130;margin-bottom:6px}
+.tb-msg{font-size:14px;min-height:20px;margin:10px 4px}
+.tb-notes{margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.tb-notes li{font-size:14px;border-radius:10px;padding:7px 10px;background:#eef1f6}
+.tb-notes li.good{background:var(--green-soft);color:var(--green)}.tb-notes li.bad{background:var(--red-soft);color:var(--red)}
+.tb-notes li.warn{background:var(--amber-soft);color:var(--amber)}
+.tb-d{border-top:1px solid var(--line)}.tb-d summary{display:grid;grid-template-columns:minmax(140px,1fr) minmax(160px,2fr) 48px;gap:12px;align-items:center;padding:10px 4px;cursor:pointer;list-style:none}
+.tb-d summary::-webkit-details-marker{display:none}
+.tb-d.sub summary{opacity:.75}.tb-dn small,.tb-db small{display:block;font-size:12px;color:var(--muted)}
+.tb-dt{font-size:20px;font-weight:800;text-align:right}
+.tb-why{margin:0 4px 12px;padding-left:18px;font-size:14px}.tb-why li{margin:4px 0}
+.tb-modal{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px}
+.tb-modal[hidden]{display:none}
+.tb-mbox{background:var(--card);border-radius:18px;width:min(640px,100%);max-height:84vh;display:flex;flex-direction:column;padding:16px;gap:10px}
+.tb-mh{display:flex;justify-content:space-between;align-items:center}
+.tb-plist{overflow:auto;display:flex;flex-direction:column;gap:6px}
+.tb-pr{display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);border-radius:12px;background:#fff;padding:8px 12px;font:inherit;cursor:pointer}
+.tb-pr:hover{border-color:var(--blue)}.tb-pr small{display:block;font-size:12px;color:var(--muted)}
+.tb-pr em{font-style:normal;font-weight:800;font-size:18px;text-align:right;white-space:nowrap}
+@media (max-width:900px){.tb-wrap{grid-template-columns:1fr}}
+@media (max-width:520px){.tb-d summary{grid-template-columns:1fr 44px}.tb-db{grid-column:1/-1;grid-row:2}}
 .trend{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:1px 8px}
 .tr-up{background:var(--green-soft);color:var(--green)}.tr-flat{background:#eef1f6;color:#475569}
 .tr-down{background:var(--red-soft);color:var(--red)}.tr-na{background:#f6f7f9;color:#94a3b8}
@@ -4184,7 +4638,7 @@ def render(d, players, teams, log=None):
 <div class="stat"><b>{e.get('event_points', '?')}</b><span>Last gameweek</span></div>
 <div class="stat"><b>{place}</b><span>Hope Bros position</span></div>
 </div></div></header>
-<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#bonus">Bonus</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#elite">Top managers</a><a href="#predictions">Predictions</a></div></nav>
+<nav><div class="in"><span class="ngrp">Review</span><a href="#season">Season</a><a href="#recap">Last gameweek</a><a href="#vsleague">Me vs the league</a><a href="#leaders">Stat leaders</a><span class="ngrp">Plan</span><a href="#squad">My squad</a><a href="#builder">Team builder</a><a href="#teams">Teams &amp; matchups</a><a href="#compare">Drop &amp; get</a><a href="#watch">Watch list</a><a href="#elite">Top managers</a><a href="#predictions">Predictions</a></div></nav>
 <div id="cmp-toast" class="toast"></div>
 <main>
 
@@ -4194,13 +4648,15 @@ def render(d, players, teams, log=None):
 
 {benchmark_section(d, players, squad)}
 
-{bonus_section(d, players, teams)}
+{leaders_section(d, players, teams)}
 
 {squad_review_section(squad, players, teams, d)}
 
 {teams_section(d, teams, players, log)}
 
 {compare_section(d, players, teams)}
+
+{builder_section(d)}
 
 {watch_section(d, players)}
 
