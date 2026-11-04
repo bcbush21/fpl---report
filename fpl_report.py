@@ -3165,8 +3165,10 @@ def forecast_all(d, players, teams):
         neg_pg = s["neg"] / s["gp"] if s["gp"] else 0
 
         t = teams[p["tid"]]
-        fx = []
-        for x in t["run"][:]:
+
+        def fixtures(p_play, p60, exp_min):
+          fx = []
+          for x in t["run"][:]:
             if x["gw"] >= d["next"] + PREDICT_AHEAD:
                 continue
             att = _clamp(x["att"], 0.55, 1.8)
@@ -3186,7 +3188,14 @@ def forecast_all(d, players, teams):
             )
             fx.append([x["gw"], x["opp_id"], 1 if x["home"] else 0, round(exp_min), round(p_cs, 2), round(att, 2),
                        [round(c[k], 2) for k in FC_KEYS]])
-        out[p["id"]] = dict(fx=fx, pp=round(p_play, 2), p60=round(p60, 2), mo=round(mins_on), xg=round(xg90, 2), xa=round(xa90, 2),
+          return fx
+
+        fx = fixtures(p_play, p60, exp_min)
+        # no recent minutes (injured, just back, or not picked): what he'd be worth if he started and played 85'
+        if_starts = None
+        if p_play == 0 and p["status"] != "u":
+            if_starts = [[f[0], f[1], f[2], round(sum(f[6]), 1), f[4]] for f in fixtures(1.0, 1.0, mins_on or 85)]
+        out[p["id"]] = dict(fx=fx, fi=if_starts, pp=round(p_play, 2), p60=round(p60, 2), mo=round(mins_on), xg=round(xg90, 2), xa=round(xa90, 2),
                             dc=round(dc_rate, 2), bon=round(bon_pg, 2))
     return out
 
@@ -3354,7 +3363,12 @@ function judge(){
 // ---------- each player's prediction, and why
 function why(p){
   const f = fc(p), fcd = p.fc;
-  if (!fcd) return `<p class="tb-why">${p.st !== 'a' ? esc(p.news || 'Flagged as unavailable') + '. ' : ''}Hasn't played in his team's last 3 gameweeks, so he's predicted nothing until he does.</p>`;
+  if (!fcd){
+    const ifs = (p.fi || []).filter(f => f[0] <= lastGW());
+    const ifTxt = ifs.length ? ` <b>If he starts and plays about 85':</b> ${ifs.map(([gw, opp, home, t, pcs]) => `GW${gw} vs ${esc(tf(opp))} (${home ? 'H' : 'A'}) ${t.toFixed(1)}${['GK', 'DEF', 'MID'].includes(p.pos) ? `, ${Math.round(pcs * 100)}% clean-sheet chance` : ''}`).join('; ')}.
+      That uses ${p.mins ? 'his own rates' : 'average rates for his position (he has no minutes this season)'}, so treat it as a rough guide.` : '';
+    return `<p class="tb-why">${p.st !== 'a' ? esc(p.news || 'Flagged as unavailable') + '. ' : ''}No minutes in his team's last 3 gameweeks, so the prediction counts him as not playing (0).${ifTxt}</p>`;
+  }
   const lines = [];
   lines.push(`<b>Minutes:</b> expected ${f.fx.length ? f.fx[0][3] : 0}' a game. He played in ${Math.round(fcd.pp * 100)}% of his team's recent games, averaging ${fcd.mo}', and lasted 60+ in ${Math.round(fcd.p60 * 100)}% of them${p.st !== 'a' ? '; ' + esc(p.news || 'flagged') : ''}.`);
   f.fx.forEach(([gw, opp, home, mins, pcs, att, c]) => {
@@ -3474,8 +3488,8 @@ def compare_data(d, players, teams):
     rows = []
     for p in players.values():
         wk = [[gw, live.get(gw, {}).get(p["id"], 0), live_min.get(gw, {}).get(p["id"], 0)] for gw in gws]
-        if not any(m for _, _, m in wk) and not p["mine"] and p["mins"] == 0:
-            continue  # never played and not yours: nothing to compare
+        if not any(m for _, _, m in wk) and not p["mine"] and p["mins"] == 0 and p["status"] == "u":
+            continue  # never played and gone (left the league or unavailable all season)
         # predictions need a match log; fall back to weekly data for players without a fetched history
         q = p if p["log"] else dict(p, log=[dict(gw=g, pts=pt, mins=m) for g, pt, m in wk])
         preds = predict_points(q, teams)
@@ -3502,7 +3516,7 @@ def compare_data(d, players, teams):
             sp=set_piece_info(p, sp_code, sp_team), ms=minutes_security(p, t, live_min),
             mv=moves_data(p), fv=finishing_verdict(p), pb=points_by_gw(p, d, fin),
             el=[p["el"]["own"], p["el"]["chg"], p["el"]["cap"]] if p.get("el") else None,
-            fc=fcs[p["id"]] if fcs[p["id"]]["pp"] > 0 else None, tr=form_trend(p, d)))
+            fc=fcs[p["id"]] if fcs[p["id"]]["pp"] > 0 else None, fi=fcs[p["id"]]["fi"], tr=form_trend(p, d)))
     played_t = [x for x in teams.values() if x["gp"]]
     avgs = {k: (sum(x[k] for x in played_t) / len(played_t) if played_t else 1.3) for k in ("def_rating", "att_rating")}
     return dict(players=rows, teams={tid: dict(n=t["name"], f=t["full"], c=t["code"],
