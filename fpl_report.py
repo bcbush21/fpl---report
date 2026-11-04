@@ -3215,12 +3215,13 @@ def form_trend(p, d):
 def builder_section(d):
     return f"""<section id="builder"><h2>Team builder</h2>
 <p class="note">Build any 15: 2 keepers, 5 defenders, 5 midfielders and 3 forwards, with 11 starting. Start from your own squad or
-from scratch, then tap an empty spot to add a player, tap a player to see why he's predicted what he is, and tap a starter and then
-a sub to swap them. The team is saved in this browser. Predicted points are an estimate built from parts: minutes, goals and assists
+from scratch, then pick a formation, tap an empty spot to add a player, tap a player to see why he's predicted what he is, and tap a
+starter and then a sub to swap them (swapping across positions changes the formation too). The team is saved in this browser. Predicted points are an estimate built from parts: minutes, goals and assists
 from his xG and xA against how leaky the opponent is, clean-sheet chances from both teams' numbers, his DC and bonus rates, and his
 cards. Checked against GW7-9, the predictions averaged within 0.1 of what players actually scored.</p>
 <div class="card tb-bar">
-<div class="tb-btns"><button id="tb-mine" class="sb">Load my squad</button><button id="tb-clear" class="sb">Clear</button></div>
+<div class="tb-btns"><button id="tb-mine" class="sb">Load my squad</button><button id="tb-clear" class="sb">Clear</button>
+<label class="tb-fl">Formation <select id="tb-form" aria-label="Formation"></select></label></div>
 <div class="pbsw" id="tb-h"><button class="pbw" data-h="1">GW{d["next"]}</button><button class="pbw" data-h="{PREDICT_AHEAD}">Next {PREDICT_AHEAD} GWs</button></div>
 </div>
 <div class="tb-wrap"><div><div class="tb-pitch" id="tb-pitch"></div><div class="tb-bench" id="tb-bench"></div>
@@ -3248,11 +3249,35 @@ const POSW = {GK: 'goalkeeper', DEF: 'defender', MID: 'midfielder', FWD: 'forwar
 const LAB = {min: 'Minutes', g: 'Goals', a: 'Assists', cs: 'Clean sheet', gc: 'Goals conceded', dc: 'DC', sv: 'Saves', bon: 'Bonus', neg: 'Cards'};
 const COL = {min: '#94a3b8', g: '#1d4ed8', a: '#60a5fa', cs: '#16a34a', gc: '#f97316', dc: '#0d9488', sv: '#8b5cf6', bon: '#f59e0b', neg: '#ef4444'};
 const tn = tid => D.teams[tid] ? D.teams[tid].n : '?', tf = tid => D.teams[tid] ? D.teams[tid].f : '?';
-let squad = [], H = 1, sel = null, pick = null;   // squad: [{id, start}]
+// every legal FPL formation: 3-5 defenders, 2-5 midfielders, 1-3 forwards
+const FORMS = ['3-4-3', '3-5-2', '4-3-3', '4-4-2', '4-5-1', '5-2-3', '5-3-2', '5-4-1'];
+let squad = [], H = 1, sel = null, pick = null, F = '4-4-2';   // squad: [{id, start}]
 try { const s = JSON.parse(localStorage.getItem('fpl-builder') || 'null');
-      if (s && Array.isArray(s.squad)) { squad = s.squad.filter(x => P[x.id]); H = s.h === D.ahead ? D.ahead : 1; } } catch (e) {}
-const save = () => { try { localStorage.setItem('fpl-builder', JSON.stringify({squad, h: H})); } catch (e) {} };
-function loadMine(){ squad = D.squad.filter(([id]) => P[id]).map(([id, pos]) => ({id, start: pos <= 11})); sel = null; }
+      if (s && Array.isArray(s.squad)) { squad = s.squad.filter(x => P[x.id]); H = s.h === D.ahead ? D.ahead : 1;
+        if (FORMS.includes(s.f)) F = s.f; } } catch (e) {}
+const save = () => { try { localStorage.setItem('fpl-builder', JSON.stringify({squad, h: H, f: F})); } catch (e) {} };
+function loadMine(){ squad = D.squad.filter(([id]) => P[id]).map(([id, pos]) => ({id, start: pos <= 11})); sel = null; F = derive() || F; }
+const targetOf = f => { const [d, m, w] = f.split('-').map(Number); return {GK: 1, DEF: d, MID: m, FWD: w}; };
+// the formation the starters are actually in, once there are 11 of them
+function derive(){
+  const st = squad.filter(x => x.start);
+  if (st.length !== 11) return null;
+  const f = ['DEF', 'MID', 'FWD'].map(pos => st.filter(x => P[x.id].pos === pos).length).join('-');
+  return FORMS.includes(f) ? f : null;
+}
+// switch formation: keep the best-predicted starters, bring on the best-predicted subs, leave gaps where nobody's picked yet
+function setFormation(f){
+  F = f;
+  const t = targetOf(f);
+  const pts = x => fc(P[x.id]).total;
+  for (const pos of ORDER){
+    const on = squad.filter(x => P[x.id].pos === pos && x.start).sort((a, b) => pts(a) - pts(b));   // weakest first
+    const off = squad.filter(x => P[x.id].pos === pos && !x.start).sort((a, b) => pts(b) - pts(a)); // best first
+    while (on.length > t[pos]) on.shift().start = false;
+    while (on.length < t[pos] && off.length){ const x = off.shift(); x.start = true; on.push(x); }
+  }
+  sel = null;
+}
 if (!squad.length) loadMine();
 
 // ---------- the forecast for the chosen horizon
@@ -3288,7 +3313,7 @@ function layout(){
   squad.filter(x => x.start).forEach(x => rows[P[x.id].pos].push(x.id));
   squad.filter(x => !x.start).forEach(x => b.push(x.id));
   let open = 11 - starters().length;
-  const target = {GK: 1, DEF: 4, MID: 4, FWD: 2};
+  const target = targetOf(F);
   for (const pos of ORDER){
     let missing = NEED[pos] - count(squad, pos);
     while (missing > 0 && open > 0 && rows[pos].length < target[pos]){ rows[pos].push({empty: pos, start: true}); missing--; open--; }
@@ -3316,6 +3341,7 @@ function draw(){
   $('#tb-pitch').innerHTML = '<div class="tb-lines"></div>' + ORDER.map(pos => `<div class="tb-row">${L.rows[pos].map(card).join('')}</div>`).join('');
   $('#tb-bench').innerHTML = `<div class="tb-bl">Bench</div><div class="tb-row">${L.bench.map(card).join('')}</div>`;
   document.querySelectorAll('#tb-h .pbw').forEach(b => b.classList.toggle('on', +b.dataset.h === H));
+  $('#tb-form').value = F;
   judge(); detail(); save();
 }
 
@@ -3423,7 +3449,9 @@ function plist(){
 }
 function choose(id){
   if (pick.replace){ const x = squad.find(x => x.id === pick.replace); x.id = id; }
-  else squad.push({id, start: pick.start && validXI(squad.concat({id, start: true})) === null && starters().length < 11});
+  else squad.push({id, start: pick.start && validXI(squad.concat({id, start: true})) === null && starters().length < 11
+                     && count(starters(), P[id].pos) < targetOf(F)[P[id].pos]});
+  F = derive() || F;
   $('#tb-picker').hidden = true; sel = null; pick = null; $('#tb-msg').textContent = ''; draw();
 }
 
@@ -3450,7 +3478,7 @@ document.getElementById('builder').addEventListener('click', e => {
       const trial = squad.map(x => x === a ? {...x, start: b.start} : x === b ? {...x, start: a.start} : x);
       const err = validXI(trial);
       if (err){ $('#tb-msg').textContent = err; return; }
-      squad = trial; sel = null; $('#tb-msg').textContent = ''; return draw();
+      squad = trial; sel = null; F = derive() || F; $('#tb-msg').textContent = ''; return draw();
     }
   }
   sel = sel === id ? null : id; $('#tb-msg').innerHTML = sel ? `<b>${esc(P[sel].n)}</b> selected. Tap a ${squad.find(x => x.id === sel).start ? 'sub' : 'starter'} to swap, or
@@ -3460,6 +3488,9 @@ document.getElementById('builder').addEventListener('click', e => {
 });
 ['#tb-pq'].forEach(s => $(s).addEventListener('input', plist));
 ['#tb-pwho', '#tb-pteam'].forEach(s => $(s).addEventListener('change', plist));
+$('#tb-form').innerHTML = FORMS.map(f => `<option value="${f}">${f}</option>`).join('');
+$('#tb-form').addEventListener('change', e => { setFormation(e.target.value); $('#tb-msg').textContent = ''; draw(); });
+if (derive()) F = derive();
 draw();
 })();
 """
@@ -3634,7 +3665,8 @@ MOVES_CSS = """
 .elc{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:14px;padding:10px 12px}
 .elc>div{flex:1;min-width:0;font-size:14px}.elc small{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}
 .tb-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-.tb-btns{display:flex;gap:8px}
+.tb-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tb-fl{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:700;color:var(--muted)}
 .tb-wrap{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr);gap:18px;align-items:start;margin-top:16px}
 .tb-pitch{position:relative;border-radius:16px 16px 0 0;padding:18px 6px 14px;display:flex;flex-direction:column;gap:14px;overflow:hidden;
   background:repeating-linear-gradient(180deg,#3fa34d 0 56px,#389446 56px 112px)}
