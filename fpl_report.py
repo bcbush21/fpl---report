@@ -2621,7 +2621,7 @@ position, <b>Miss</b> if a point below, otherwise <b>About average</b>. Picks ar
 <p class="note" style="margin:8px 0 0">Opens GitHub with everything filled in; tap <b>Create</b> there. It shows up here in about two minutes.</p></div></div>
 {summary}
 <h3 class="lbl">Watching ({len(active)})</h3>
-{''.join(watch_card(e, d) for e in active) or '<p class="mv-none">Nothing on your watch list yet. Add a player above, or tap Watch next to any option in Drop &amp; get.</p>'}
+{''.join(watch_card(e, d) for e in active) or '<p class="mv-none">Nothing on your watch list yet. Add a player above.</p>'}
 {f'<h3 class="lbl">Past picks ({len(past)})</h3>' + ''.join(watch_card(e, d) for e in past) if past else ''}
 {moves_html(d, players)}
 <script type="application/json" id="w-data">{pdata}</script>
@@ -3231,7 +3231,7 @@ const f1 = v => (+v).toFixed(1);
 
 // ---------- your plan: who you mean to pick up or let go (kept in this browser)
 let plan = {get: [], drop: []};
-try { const s = JSON.parse(localStorage.getItem('fpl-plan') || 'null'); if (s && s.get) plan = s; } catch (e) {}
+if (document.getElementById('mv-root')) try { const s = JSON.parse(localStorage.getItem('fpl-plan') || 'null'); if (s && s.get) plan = s; } catch (e) {}
 plan.get = plan.get.filter(id => P[id] && !P[id].mine); plan.drop = plan.drop.filter(id => P[id] && P[id].mine);
 const savePlan = () => { try { localStorage.setItem('fpl-plan', JSON.stringify(plan)); } catch (e) {} };
 
@@ -3775,17 +3775,11 @@ results(); draw(); drawCands();
 def compare_section(d, players, teams):
     data = json.dumps(compare_data(d, players, teams), separators=(",", ":")).replace("</", "<\\/")
     bar = " · ".join(f"{pos} {v:.1f}" for pos, v in league_benchmark(d, players)[3].items())
-    return f"""<section id="compare"><h2>Who to drop, who to get</h2>
-<p class="note">Every player is judged on two tests, using only what has happened. <b>Above the bar:</b> points a week over his
-team's last 3 gameweeks beat what a counted player at his position scores for the rest of Hope Bros ({bar}).
-<b>Won his spot:</b> started the last 3 and averaged {NAILED_MINS}+ minutes, or started the last 2 at that level. A player below the
-bar still counts if he's <b>due</b>: playing the minutes, creating chances like a top-quarter player at his position, with a good next 2.
-Options are ranked by how many boxes they tick: the two tests, a good next 5 for the way he scores, a better club spread
-(pairs from as many clubs as possible, no more than 3 from one), and a role worth backing.</p>
-<div id="mv-root"></div>
-<h3 class="lbl">Compare any players</h3>
-<p class="note">Line up to 4 side by side. Search any player, tap <b>+ Compare</b> anywhere in the report, or pick one of yours and tap
-Find replacements for the full list at his position. Green = best in that row.</p>
+    return f"""<section id="compare"><h2>Compare players</h2>
+<p class="note">Line up to 4 players side by side. Search any player, filter by club, position or who owns him, tap <b>+ Compare</b>
+anywhere in the report, or pick one of yours and tap Find replacements for the full list at his position. Green = best in that row.
+<b>Your tests</b> row: <b>above the bar</b> means his points a week over his team's last 3 gameweeks beat what a counted player at his
+position scores for the rest of Hope Bros ({bar}); <b>nailed</b> means he started the last 3 and averaged {NAILED_MINS}+ minutes.</p>
 <div class="card cmp-tools">
 <div class="cmp-row"><label>Find replacements for</label><select id="cmp-mine"></select>
 <button id="cmp-repl" class="sb on">Find replacements</button></div>
